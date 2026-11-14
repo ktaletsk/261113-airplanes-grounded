@@ -78,6 +78,10 @@ def _(mo):
                              animation: er-slide 1.4s ease-in-out infinite; }
       @keyframes er-slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(340%); } }
       body:has(.er-hero) .er-loading { display: none; }
+      .er-fig { max-width: 880px; margin: 30px auto 6px; }
+      .er-fig-t { font: 700 18px/1.3 Inter, sans-serif; margin: 0 0 4px; }
+      .er-fig-s { font: 400 13.5px/1.45 Inter, sans-serif; opacity: .7; margin: 0 0 12px; }
+      .er-multi { display: flex; flex-wrap: wrap; gap: 10px 14px; justify-content: center; }
       .er-databar { max-width: 720px; margin: 0 auto; display: flex; align-items: center; gap: 16px;
                     font: 400 13px/1.45 Inter, sans-serif; padding: 10px 14px; border-radius: 8px;
                     background: rgba(127,127,127,.10); }
@@ -306,6 +310,7 @@ def _(
     TOT_EV,
     T_END,
     alt,
+    fig,
     pd,
     rec_bs,
     rec_ev,
@@ -332,18 +337,18 @@ def _(
     def _panel(d, main, ytitle, legend):
         return with_events(alt.Chart(d).mark_line().encode(
             x=_x, y=alt.Y("n:Q", title=ytitle),
-            color=alt.Color("day:N", sort=_order, title=None, legend=alt.Legend(orient="top") if legend else None,
+            color=alt.Color("day:N", sort=_order, title=None, legend=None,
                             scale=alt.Scale(domain=_order, range=[main, "#9aa5b1", "#9aa5b1"])),
             strokeDash=_dash, strokeWidth=_width, opacity=_op,
             tooltip=["day:N", alt.Tooltip("time_pt:T", format="%-I:%M %p"), alt.Tooltip("n:Q", format=",.0f")])
-        ).properties(width=880, height=210)
+        ).properties(width="container", height=210)
     recovery_chart = alt.vconcat(
         _panel(_dep, "#1c7ed6", "airline departures / 30 min", True),
         _panel(_air, "#f08c00", "aircraft in the air", False),
     ).resolve_scale(color="independent").properties(title=alt.Title(
         "The day in one chart",
-        subtitle="U.S. airline departures and aircraft in the air, Pacific time · bold: Nov. 13 · faint dashed: Nov. 12 · faint dotted: Nov. 6, a normal Friday"))
-    recovery_chart
+        subtitle="U.S. airline departures (top) and aircraft in the air (bottom), Pacific time. Bold line: Nov. 13; faint dashed: Nov. 12; faint dotted: Nov. 6, a normal Friday"))
+    fig(recovery_chart)
     return
 
 
@@ -427,6 +432,7 @@ def _(
     T_END,
     alt,
     dt,
+    fig,
     pd,
     tk_base,
     tk_event,
@@ -453,7 +459,7 @@ def _(
         width="container", height=280,
         title=alt.Title("Airline takeoffs stopped before the ground stop was declared",
                         subtitle="Airline takeoffs per minute across the U.S., Pacific time · blue: Nov. 13 · dashed grey: Nov. 12"))
-    cliff_chart
+    fig(cliff_chart)
     return
 
 
@@ -497,11 +503,11 @@ def _(
 
 
 @app.cell(hide_code=True)
-def _(APT_STOP, alt, fmt_pt, np):
+def _(APT_STOP, alt, fig, fmt_pt, np):
     _states = alt.topo_feature("https://cdn.jsdelivr.net/npm/us-atlas@3.0.1/states-10m.json", "states")
     _d = APT_STOP.copy()
     _d["when"] = _d.stop.map(fmt_pt)
-    _d["label"] = np.where(_d.index < 3, _d.apt + " " + _d.when, np.where(_d.apt.isin(["MDW"]), _d.apt + " " + _d.when, ""))
+    _d["label"] = np.where(_d.apt.isin(["ORD", "MDW"]), _d.apt + " " + _d.when, "")
     _base = alt.Chart(_states).mark_geoshape(fill="#2b2f33", stroke="#555b61", strokeWidth=0.6)
     _pts = alt.Chart(_d).mark_circle(stroke="#111", strokeWidth=0.6, opacity=0.95).encode(
         longitude="lon:Q", latitude="lat:Q",
@@ -513,10 +519,10 @@ def _(APT_STOP, alt, fmt_pt, np):
     _lab = alt.layer(*[alt.Chart(_d[(_d.label != "") & m]).mark_text(
         align="left", dx=16, dy=dy, fontSize=12, fontWeight="bold", color="#ffd84a").encode(longitude="lon:Q", latitude="lat:Q", text="label:N")
         for m, dy in [(_d.apt != "MDW", -10), (_d.apt == "MDW", 12)]])
-    origin_map = alt.layer(_base, _pts, _lab).project(type="albersUsa").properties(
-        width="container", height=430, title=alt.Title("Chicago went quiet first",
+    origin_map = alt.layer(_base, _pts, _lab).project(type="albersUsa", fit={"type": "FeatureCollection", "features": [{"type": "Feature", "properties": {}, "geometry": {"type": "MultiPoint", "coordinates": [[-124.8, 24.4], [-66.9, 49.4]]}}]}).properties(
+        width="container", height=380, title=alt.Title("Chicago went quiet first",
         subtitle="Last airline departure before each busy airport fell silent, Pacific time; darker = earlier, size = normal traffic"))
-    origin_map
+    fig(origin_map)
     return
 
 
@@ -530,6 +536,7 @@ def _(
     PERIOD_LABEL,
     T0,
     alt,
+    fig,
     fmt_pt,
     pd,
     to_pt,
@@ -551,11 +558,11 @@ def _(
             color=alt.Color("day:N", sort=list(PERIOD_LABEL.values()), legend=None, scale=alt.Scale(range=["#1c7ed6", "#adb5bd"])),
             strokeDash=alt.StrokeDash("day:N", sort=list(PERIOD_LABEL.values()), legend=None, scale=alt.Scale(range=[[1, 0], [4, 3]])))
         _r = alt.Chart(pd.DataFrame({"t": [to_pt(pd.Series([_s])).iloc[0]]})).mark_rule(color="#f08c00", strokeDash=[3, 2]).encode(x="t:T")
-        _panels.append(alt.layer(_p, _r).properties(width=150, height=80, title=alt.Title(
+        _panels.append(alt.layer(_p, _r).properties(width=96, height=80, title=alt.Title(
             f"{_a} · {fmt_pt(_s)}", fontSize=12, color="#ffd84a" if _a in ("ORD", "MDW") else None)))
     origin_grid = alt.concat(*_panels, columns=4).properties(title=alt.Title(
         "Airport by airport", subtitle="Airline departures per 5 minutes, ordered by when each went quiet (orange line); solid = Nov. 13, dashed = Nov. 12"))
-    origin_grid
+    fig(origin_grid)
     return
 
 
@@ -583,6 +590,7 @@ def _(
     T_END,
     ZONE_COLLAPSE,
     alt,
+    fig,
     fmt_pt,
     moves,
     pd,
@@ -607,17 +615,17 @@ def _(
             tooltip=["day:N", alt.Tooltip("time_pt:T", format="%-I:%M %p"), "n:Q"])
         _rules = [alt.Chart(pd.DataFrame([e])).mark_rule(color=e["color"], strokeDash=[5, 3]).encode(x="t:T")
                   for e in EVENTS.to_dict("records") if e["t"] <= to_pt(pd.Series([_hi])).iloc[0]]
-        _panels.append(alt.layer(_p, *_rules).properties(width=205, height=150, title=alt.Title(
+        _panels.append(alt.layer(_p, *_rules).properties(width=96, height=120, title=alt.Title(
             _name, subtitle=f"collapse {fmt_pt(ZONE_COLLAPSE[_name])}" if ZONE_COLLAPSE[_name] else "", fontSize=13)))
     zones_chart = alt.hconcat(*_panels).resolve_scale(y="independent").properties(
         title=alt.Title("The same minute in every region", subtitle="Airline takeoffs per 2 minutes by longitude band; "
                         "solid = Nov. 13, dashed = Nov. 12 · orange = collapse, red = FAA ground stop"))
-    zones_chart
+    fig(zones_chart)
     return
 
 
 @app.cell(hide_code=True)
-def _(alt, hubs):
+def _(alt, fig, hubs):
     _h = hubs[hubs.before > 0].melt(id_vars="hub", value_vars=["before", "after"], var_name="when", value_name="n")
     _h["when"] = _h.when.map({"before": "30 min before the collapse", "after": "30 min after"})
     _order = list(hubs[hubs.before > 0].hub)
@@ -626,12 +634,12 @@ def _(alt, hubs):
     _pts = alt.Chart(_h).mark_circle(size=110, opacity=1).encode(
         y=_y, x=alt.X("n:Q", title="airline departures in 30 minutes"),
         color=alt.Color("when:N", sort=["30 min before the collapse", "30 min after"],
-                        scale=alt.Scale(range=["#1c7ed6", "#e03131"])),
+                        scale=alt.Scale(range=["#1c7ed6", "#e03131"]), legend=alt.Legend(orient="top", columns=2, title=None)),
         tooltip=["hub:N", "when:N", "n:Q"])
-    hubs_chart = alt.layer(_rule, _pts).properties(width=620, height=alt.Step(22), title=alt.Title(
+    hubs_chart = alt.layer(_rule, _pts).properties(width="container", height=alt.Step(22), title=alt.Title(
         "At the big hubs, departures went to almost zero",
         subtitle="Airline departures within ~30 km of each airport (nearby airports included), 30 min before vs after the collapse"))
-    hubs_chart
+    fig(hubs_chart)
     return
 
 
@@ -649,22 +657,7 @@ def _(COLLAPSE_T, fmt_pt, prose):
 
 
 @app.cell(hide_code=True)
-def _(PERIOD_LABEL, alt, total, with_events):
-    _base = alt.Chart(total).encode(
-        x=alt.X("time_pt:T", title=None, axis=alt.Axis(format="%-I:%M")),
-        y=alt.Y("n:Q", title="aircraft airborne over the US"),
-        color=alt.Color("label:N", title=None, sort=list(PERIOD_LABEL.values()), scale=alt.Scale(range=["#4aa3ff", "#9aa5b1"])),
-        strokeDash=alt.StrokeDash("label:N", legend=None, sort=list(PERIOD_LABEL.values()), scale=alt.Scale(range=[[1, 0], [4, 3]])),
-        tooltip=[alt.Tooltip("time_pt:T", format="%H:%M", title="PT"), "label:N", alt.Tooltip("n:Q", title="airborne")],
-    )
-    airborne_chart = with_events(_base.mark_line(strokeWidth=2)).properties(
-        width="container", height=260, title=alt.Title("The sky drained for hours", subtitle="Aircraft airborne over the U.S. each minute, Pacific time"))
-    airborne_chart
-    return
-
-
-@app.cell(hide_code=True)
-def _(PERIOD_LABEL, alt, moves, with_events):
+def _(PERIOD_LABEL, alt, fig, moves, with_events):
     _m = moves[moves.country == "US"].groupby(["period", "time_pt", "kind"]).size().rename("n").reset_index()
     _m["series"] = _m.kind.str.title() + "s · " + _m.period.map(PERIOD_LABEL)
     moves_chart = with_events(alt.Chart(_m).mark_line(point=alt.OverlayMarkDef(size=12), strokeWidth=1.8).encode(
@@ -675,7 +668,7 @@ def _(PERIOD_LABEL, alt, moves, with_events):
                                   legend=None),
         tooltip=["series:N", alt.Tooltip("time_pt:T", format="%H:%M"), "n:Q"],
     )).properties(width="container", height=260, title=alt.Title("Takeoffs stopped; landings didn't", subtitle="All U.S. takeoffs and landings per 5 minutes, Pacific time · solid: Nov. 13 · dashed: Nov. 12"))
-    moves_chart
+    fig(moves_chart)
     return
 
 
@@ -693,7 +686,7 @@ def _(prose):
 
 
 @app.cell(hide_code=True)
-def _(T0, alt, pd, snap, to_pt, with_events):
+def _(T0, alt, fig, pd, snap, to_pt, with_events):
     # altitude bands: stacked counts (left) and each band relative to its own 10:00-12:00 PT level (right)
     _edges = [0, 5000, 15000, 25000, 35000, 99999]
     _names = ["< 5k ft", "5–15k", "15–25k", "25–35k", "35k+ (cruise)"]
@@ -709,13 +702,13 @@ def _(T0, alt, pd, snap, to_pt, with_events):
     _stack = with_events(alt.Chart(_h).mark_area(opacity=0.9).encode(
         x=_x, y=alt.Y("n:Q", stack="zero", title="aircraft airborne"), color=_band_color, order=alt.Order("band:N", sort="ascending"),
         tooltip=["band:N", alt.Tooltip("time_pt:T", format="%H:%M"), "n:Q"])).properties(
-        width=430, height=260, title=alt.Title("Airborne by altitude", subtitle="Nov. 13, Pacific time"))
+        width="container", height=260, title=alt.Title("Airborne by altitude", subtitle="Nov. 13, Pacific time"))
     _rel = with_events(alt.Chart(_h).mark_line(strokeWidth=2).encode(
         x=_x, y=alt.Y("pct:Q", title="% of the band's 10:00–12:00 average"), color=_band_color,
         tooltip=["band:N", alt.Tooltip("time_pt:T", format="%H:%M"), "n:Q", alt.Tooltip("pct:Q", format=".0f")])).properties(
-        width=430, height=260, title=alt.Title("Which layers emptied first", subtitle="Each band as % of its 10 a.m.–noon average"))
-    alt_chart = alt.hconcat(_stack, _rel).resolve_scale(color="shared")
-    alt_chart
+        width="container", height=260, title=alt.Title("Which layers emptied first", subtitle="Each band as % of its 10 a.m.–noon average"))
+    alt_chart = alt.vconcat(_stack, _rel).properties(title=alt.Title("Airborne by altitude band", subtitle="Aircraft over the U.S. on Nov. 13, Pacific time: counts (top) and each band as a share of its late-morning level (bottom)")).resolve_scale(color="shared")
+    fig(alt_chart)
     return
 
 
@@ -744,6 +737,7 @@ def _(
     T_END,
     WY_ZERO_T,
     alt,
+    fig,
     fmt_pt,
     pd,
     to_pt,
@@ -767,7 +761,7 @@ def _(
                         x="time_pt:T", y="n:Q", text="label:N")]
     wy_chart = with_events(alt.layer(*_layers)).properties(width="container", height=220, title=alt.Title(
         "Wyoming's sky, emptied", subtitle="Aircraft airborne over Wyoming; solid = Nov. 13, dashed = Nov. 12"))
-    wy_chart
+    fig(wy_chart)
     return
 
 
@@ -820,18 +814,20 @@ def _(AIR_MIN_T, CAT_NOW, fmt_pt, prose):
 
 
 @app.cell(hide_code=True)
-def _(CATS, alt, counts, with_events):
-    _c = counts[counts.t % 600 == 0]                                     # every 10 min keeps the chart light
+def _(CATS, alt, counts, fig, with_events):
+    _c = counts.sort_values("t").copy()
+    _c["n"] = _c.groupby(["period", "category"]).n.transform(lambda s: s.rolling(30, min_periods=10).mean())
+    _c = _c[_c.t % 600 == 0]                                     # every 10 min keeps the chart light
     _y = _c[_c.period == "baseline"][["category", "t", "n"]].rename(columns={"n": "n_before"})
     _t = _c[_c.period == "event"].merge(_y, on=["category", "t"], how="left")
     _t["pct"] = 100 * _t.n / _t.n_before
     category_chart = with_events(alt.Chart(_t).mark_line(strokeWidth=2).encode(
         x=alt.X("time_pt:T", title=None, axis=alt.Axis(format="%-I:%M")),
         y=alt.Y("pct:Q", title="airborne, % of the day before"),
-        color=alt.Color("category:N", title=None, sort=CATS),
+        color=alt.Color("category:N", title=None, sort=CATS, legend=alt.Legend(orient="top", columns=3)),
         tooltip=["category:N", alt.Tooltip("time_pt:T", format="%H:%M"), "n:Q", "n_before:Q", alt.Tooltip("pct:Q", format=".0f")],
-    )).properties(width="container", height=240, title=alt.Title("What is left in the air", subtitle="Aircraft airborne by category, as a share of the same time a day earlier"))
-    category_chart
+    )).properties(width="container", height=240, title=alt.Title("What is left in the air", subtitle="Aircraft airborne by category (30-minute average), as a share of the same time a day earlier"))
+    fig(category_chart)
     return
 
 
@@ -874,6 +870,7 @@ def _(
     T0,
     T_END,
     alt,
+    fig,
     np,
     pd,
     tk_all,
@@ -897,11 +894,11 @@ def _(
         _rules = [alt.Chart(pd.DataFrame([e])).mark_rule(color=e["color"], strokeDash=[5, 3]).encode(x="t:T")
                   for e in EVENTS.to_dict("records")]
         _pct = REGION_STATS[_name]["pct"]
-        _panels.append(alt.layer(_p, *_rules).properties(width=280, height=170, title=alt.Title(
+        _panels.append(alt.layer(_p, *_rules).properties(width=240, height=170, title=alt.Title(
             _name, subtitle=f"during the stop: {_pct}% of Nov. 12" if _pct is not None else "", fontSize=13)))
     states_chart = alt.hconcat(*_panels).resolve_scale(y="independent").properties(title=alt.Title(
         "Alaska and Hawaii barely noticed", subtitle="Airline departures per 30 minutes; solid = Nov. 13, dashed = Nov. 12"))
-    states_chart
+    fig(states_chart)
     return
 
 
@@ -948,6 +945,7 @@ def _(
     T0,
     T_END,
     alt,
+    fig,
     lh_tk,
     np,
     pd,
@@ -967,7 +965,7 @@ def _(
         tooltip=["day:N", alt.Tooltip("time_pt:T", format="%-I:%M %p"), "n:Q"])).properties(
         width="container", height=240, title=alt.Title("Wide-bodies dipped, then the long-haul bank left",
                                                        subtitle="Wide-body airline departures from the lower 48 per 30 minutes; solid = Nov. 13, dashed = Nov. 12"))
-    intl_chart
+    fig(intl_chart)
     return
 
 
@@ -993,40 +991,41 @@ def _(CNN_ORIGIN, GATEWAYS, GW_PCT, TRICKLE, prose):
 
 
 @app.cell(hide_code=True)
-def _(GATEWAYS, alt):
-    _d = GATEWAYS.head(16).melt(id_vars=["apt", "kind"], value_vars=["nov13", "nov12"], var_name="day", value_name="n")
-    _d["day"] = _d.day.map({"nov13": "Nov. 13, during the stop", "nov12": "Nov. 12, same hours"})
-    _order = GATEWAYS.head(16).sort_values(["kind", "nov12"], ascending=[True, False]).apt.tolist()
-    gateway_chart = alt.Chart(_d).mark_bar().encode(
-        y=alt.Y("apt:N", sort=_order, title=None),
-        x=alt.X("n:Q", title="wide-body departures"),
-        yOffset=alt.YOffset("day:N", sort=["Nov. 13, during the stop", "Nov. 12, same hours"]),
+def _(GATEWAYS, alt, fig):
+    _d = GATEWAYS.head(16).copy()
+    _order = _d.sort_values(["kind", "nov12"], ascending=[True, False]).apt.tolist()
+    _y = alt.Y("apt:N", sort=_order, title=None)
+    _rule = alt.Chart(_d).mark_rule(color="#868e96", strokeWidth=2).encode(y=_y, x="nov12:Q", x2="nov13:Q")
+    _was = alt.Chart(_d).mark_circle(size=70, color="#adb5bd", opacity=1).encode(
+        y=_y, x=alt.X("nov12:Q", title="wide-body departures during the stop hours"),
+        tooltip=["apt:N", alt.Tooltip("nov12:Q", title="Nov. 12, same hours")])
+    _now = alt.Chart(_d).mark_circle(size=110, opacity=1).encode(
+        y=_y, x="nov13:Q",
         color=alt.Color("kind:N", title=None, scale=alt.Scale(domain=["coastal gateway", "inland hub"], range=["#1c7ed6", "#e8590c"]),
                         legend=alt.Legend(orient="top")),
-        opacity=alt.Opacity("day:N", sort=["Nov. 13, during the stop", "Nov. 12, same hours"], scale=alt.Scale(range=[1, 0.3]),
-                            legend=alt.Legend(orient="top", title=None)),
-        tooltip=["apt:N", "kind:N", "day:N", "n:Q"]).properties(width="container", height=alt.Step(11), title=alt.Title(
+        tooltip=["apt:N", "kind:N", alt.Tooltip("nov13:Q", title="Nov. 13, during the stop")])
+    gateway_chart = alt.layer(_rule, _was, _now).properties(width="container", height=alt.Step(20), title=alt.Title(
         "Coastal gateways kept sending long-haul flights; inland hubs mostly didn't",
-        subtitle="Wide-body airline departures between the collapse and the lift, vs. the same hours on Nov. 12"))
-    gateway_chart
+        subtitle="Wide-body airline departures between the collapse and the lift: colored dot = Nov. 13, grey dot = same hours on Nov. 12"))
+    fig(gateway_chart)
     return
 
 
 @app.cell(hide_code=True)
-def _(AIRSPACE, ROUTES, alt, pd):
+def _(AIRSPACE, ROUTES, alt, fig, pd):
     _feats = alt.Data(values=AIRSPACE)
     _states = alt.topo_feature("https://cdn.jsdelivr.net/npm/us-atlas@3.0.1/states-10m.json", "states")
     _bbox = {"type": "FeatureCollection", "features": [{"type": "Feature", "properties": {}, "geometry": {
-        "type": "Polygon", "coordinates": [[[-135, 18], [-135, 55], [-55, 55], [-55, 18], [-135, 18]][::-1]]}}]}
-    _proj = dict(type="mercator", center=[-100, 44], scale=620)
-    _centers = alt.Chart(_feats).mark_geoshape(fill="#e8590c", fillOpacity=0.10, stroke="#e8590c", strokeOpacity=0.55, strokeWidth=0.8)
-    _st = alt.Chart(_states).mark_geoshape(fill=None, stroke="#6c757d", strokeWidth=0.4)
+        "type": "MultiPoint", "coordinates": [[-128, 21], [-62, 53]]}}]}
+    _proj = dict(type="mercator", fit=_bbox)
+    _centers = alt.Chart(_feats).mark_geoshape(clip=True, fill="#e8590c", fillOpacity=0.10, stroke="#e8590c", strokeOpacity=0.55, strokeWidth=0.8)
+    _st = alt.Chart(_states).mark_geoshape(clip=True, fill=None, stroke="#6c757d", strokeWidth=0.4)
     _lab = alt.Chart(alt.Data(values=[{"id": f["properties"]["id"], "lon": f["properties"]["lon"], "lat": f["properties"]["lat"]}
                                       for f in AIRSPACE if f["properties"].get("lon")])).mark_text(
-        color="#e8590c", fontSize=9, opacity=0.8).encode(longitude="lon:Q", latitude="lat:Q", text="id:N")
+        color="#e8590c", fontSize=10, opacity=0.8, clip=True).encode(longitude="lon:Q", latitude="lat:Q", text="id:N")
     _rows = [{"route": f'{r["cs"]} from {r["apt"]}', "kind": r["kind"], "i": i, "lon": p[0], "lat": p[1]}
              for r in ROUTES for i, p in enumerate(r["path"])]
-    _paths = alt.Chart(pd.DataFrame(_rows)).mark_line(strokeWidth=2.2).encode(
+    _paths = alt.Chart(pd.DataFrame(_rows)).mark_line(strokeWidth=2.2, clip=True).encode(
         longitude="lon:Q", latitude="lat:Q", detail="route:N", order="i:Q",
         color=alt.Color("kind:N", title=None, legend=alt.Legend(orient="bottom"),
                         scale=alt.Scale(domain=["left during the stop (coastal)", "same hour on Nov. 12 (inland, held on Nov. 13)"],
@@ -1035,13 +1034,13 @@ def _(AIRSPACE, ROUTES, alt, pd):
             domain=["left during the stop (coastal)", "same hour on Nov. 12 (inland, held on Nov. 13)"], range=[[1, 0], [5, 3]])),
         tooltip=["route:N", "kind:N"]) if _rows else alt.Chart(pd.DataFrame({"lon": [], "lat": []})).mark_line()
     _ends = pd.DataFrame([{"route": f'{r["cs"]} from {r["apt"]}', "lon": r["path"][0][0], "lat": r["path"][0][1], "apt": r["apt"]} for r in ROUTES])
-    _dots = alt.Chart(_ends).mark_text(fontSize=11, fontWeight="bold", color="#f1f3f5", dy=-9).encode(
+    _dots = alt.Chart(_ends).mark_text(fontSize=12, fontWeight="bold", color="#f1f3f5", dy=-9, clip=True).encode(
         longitude="lon:Q", latitude="lat:Q", text="apt:N") if len(_ends) else alt.Chart(pd.DataFrame({"lon": []})).mark_point()
     airspace_map = alt.layer(_centers, _st, _lab, _paths, _dots).project(**_proj).properties(
-        width="container", height=440, title=alt.Title(
+        width="container", height=400, title=alt.Title(
             "Inland long-haul flights must cross the failing en-route centers first",
             subtitle="Shaded: the 20 lower-48 air route traffic control centers. Example wide-body routes, first 4 hours after takeoff"))
-    airspace_map
+    fig(airspace_map)
     return
 
 
@@ -1068,7 +1067,7 @@ def _(GLOBAL_NEWS, NEIGHBOR_STATS, NYT_LIVE, prose):
 
 
 @app.cell(hide_code=True)
-def _(EVENTS, NB_END, PERIOD_LABEL, T0, alt, nb_tk, np, pd, to_pt):
+def _(EVENTS, NB_END, PERIOD_LABEL, T0, alt, fig, nb_tk, np, pd, to_pt):
     _d = nb_tk[nb_tk.t < NB_END // 1800 * 1800]
     _d = _d.assign(b=_d.t // 1800 * 1800, dest=np.where(_d.to_us, "into U.S. airspace", "elsewhere"))
     _bins = np.arange(T0, NB_END // 1800 * 1800, 1800)
@@ -1089,11 +1088,11 @@ def _(EVENTS, NB_END, PERIOD_LABEL, T0, alt, nb_tk, np, pd, to_pt):
             tooltip=["dest:N", "day:N", alt.Tooltip("time_pt:T", format="%-I:%M %p"), "n:Q"])
         _rules = [alt.Chart(pd.DataFrame([e])).mark_rule(color=e["color"], strokeDash=[5, 3]).encode(x="t:T")
                   for e in EVENTS.to_dict("records")]
-        _panels.append(alt.layer(_p, *_rules).properties(width=430, height=200, title=alt.Title(_name, fontSize=13)))
+        _panels.append(alt.layer(_p, *_rules).properties(width=255, height=200, title=alt.Title(_name, fontSize=13)))
     neighbors_chart = alt.hconcat(*_panels).resolve_scale(y="independent", color="shared").properties(title=alt.Title(
         "Canada and Mexico: U.S.-bound departures stopped, the rest kept going",
         subtitle="Airline departures per 30 minutes; solid = Nov. 13, dashed = Nov. 12"))
-    neighbors_chart
+    fig(neighbors_chart)
     return
 
 
@@ -1124,6 +1123,7 @@ def _(
     TARMAC,
     T_END,
     alt,
+    fig,
     fmt_pt,
     pd,
     to_pt,
@@ -1136,8 +1136,7 @@ def _(
         tooltip=["apt:N", alt.Tooltip("peak:Q", title="peak on ground"), alt.Tooltip("when:N", title="at (PT)"),
                  alt.Tooltip("normal:Q", title="normal", format=".0f"), alt.Tooltip("ratio:Q", format=".1f")])
     _txt = _bars.mark_text(align="left", dx=4, color="#adb5bd", fontSize=11).encode(text=alt.Text("peak:Q"))
-    _left = alt.layer(_bars, _txt).properties(width=300, height=alt.Step(18), title=alt.Title(
-        "Where the planes piled up", subtitle="Aircraft on the ground (transponder on), average during the stop vs. the same morning; label = peak"))
+    _left = alt.layer(_bars, _txt).properties(width="container", height=alt.Step(18))
     _a = TARMAC.apt.iloc[0] if len(TARMAC) else "ORD"
     _s = pd.concat([GROUND.loc[(p, _a)].rename("n").to_frame().assign(day=PERIOD_LABEL[p]) for p in PERIODS
                     if (p, _a) in GROUND.index]).rename_axis("t").reset_index()
@@ -1147,10 +1146,10 @@ def _(
         x=alt.X("time_pt:T", title=None, axis=alt.Axis(format="%-I:%M")), y=alt.Y("n:Q", title="aircraft on the ground"),
         color=alt.Color("day:N", sort=list(PERIOD_LABEL.values()), legend=None, scale=alt.Scale(range=["#e8590c", "#adb5bd"])),
         strokeDash=alt.StrokeDash("day:N", sort=list(PERIOD_LABEL.values()), legend=None, scale=alt.Scale(range=[[1, 0], [4, 3]])),
-        tooltip=["day:N", alt.Tooltip("time_pt:T", format="%-I:%M %p"), "n:Q"])).properties(width=400, height=260, title=alt.Title(
+        tooltip=["day:N", alt.Tooltip("time_pt:T", format="%-I:%M %p"), "n:Q"])).properties(width="container", height=260, title=alt.Title(
         f"{_a}: aircraft on the ground", subtitle="solid = Nov. 13, dashed = Nov. 12 (transponder on)"))
-    tarmac_chart = alt.hconcat(_left, _right)
-    tarmac_chart
+    tarmac_chart = alt.vconcat(_left, _right).properties(title=alt.Title("Where the planes piled up", subtitle="Aircraft on the ground (transponder on): average during the stop as a multiple of the same morning; label = peak count. Below: the top airport through the day"))
+    fig(tarmac_chart)
     return
 
 
@@ -1223,6 +1222,7 @@ def _(
     T_END,
     alt,
     dt,
+    fig,
     pd,
     rec_bs,
     rec_ev,
@@ -1241,7 +1241,7 @@ def _(
                               "label": f"{LAG_MIN}-minute lag"}])
         _layers += [alt.Chart(_gap).mark_rect(color="#2f9e44", opacity=0.10).encode(x="a:T", x2="b:T"),
                     alt.Chart(_gap.assign(mid=_gap.a + (_gap.b - _gap.a) / 2)).mark_text(
-                        color="#2f9e44", fontSize=12, fontWeight="bold", baseline="bottom").encode(x="mid:T", y=alt.value(40), text="label:N")]
+                        color="#2f9e44", fontSize=12, fontWeight="bold", baseline="top").encode(x="mid:T", y=alt.value(40), text="label:N")]
     _lines = alt.Chart(_c).mark_line(strokeWidth=2.2, interpolate="monotone").encode(
         x=alt.X("time_pt:T", title=None, axis=alt.Axis(format="%-I:%M")),
         y=alt.Y("n:Q", title="airline takeoffs per minute (5-min avg)"),
@@ -1252,7 +1252,7 @@ def _(
         width="container", height=260,
         title=alt.Title("Departures restarted after the lift, not with it",
                         subtitle="Airline takeoffs per minute across the U.S. (5-minute average), Pacific time · blue: Nov. 13 · dashed grey: Nov. 12"))
-    restart_chart
+    fig(restart_chart)
     return
 
 
@@ -1272,7 +1272,7 @@ def _(BACKLOG_PCT, EVE_ONSCHED_PCT, LIFT_T, PEAK_T, T_END, fmt_pt, prose):
 
 
 @app.cell(hide_code=True)
-def _(BACKLOG, BACKLOG_KINDS, alt, to_pt, week_moves, with_events):
+def _(BACKLOG, BACKLOG_KINDS, alt, fig, to_pt, week_moves, with_events):
     _b = BACKLOG.assign(b=BACKLOG.t // 900 * 900).groupby(["b", "kind"]).size().rename("n").reset_index()
     _b["time_pt"] = to_pt(_b.b + 450)
     _wkq = _wk15 = week_moves[(week_moves.kind == "takeoff") & (week_moves.category == "Airline") & (week_moves.country == "US")
@@ -1283,7 +1283,7 @@ def _(BACKLOG, BACKLOG_KINDS, alt, to_pt, week_moves, with_events):
     _area = alt.Chart(_b).mark_area(opacity=0.9, interpolate="monotone").encode(
         x=alt.X("time_pt:T", title=None, axis=alt.Axis(format="%-I:%M")),
         y=alt.Y("n:Q", stack="zero", title="airline departures / 15 min"),
-        color=alt.Color("kind:N", title=None, sort=BACKLOG_KINDS, legend=alt.Legend(orient="top"),
+        color=alt.Color("kind:N", title=None, sort=BACKLOG_KINDS, legend=alt.Legend(orient="top", columns=2),
                         scale=alt.Scale(domain=BACKLOG_KINDS, range=["#e8590c", "#fab005", "#1c7ed6", "#868e96"])),
         order=alt.Order("kind_order:Q"),
         tooltip=["kind:N", alt.Tooltip("time_pt:T", format="%-I:%M %p"), "n:Q"]).transform_calculate(
@@ -1294,7 +1294,7 @@ def _(BACKLOG, BACKLOG_KINDS, alt, to_pt, week_moves, with_events):
         width="container", height=260, title=alt.Title(
             "The backlog left in a wave on top of a thin evening schedule",
             subtitle="Airline departures after the lift, by how each flight number compares with Nov. 6 (estimated) · dotted: all departures on Nov. 6"))
-    backlog_chart
+    fig(backlog_chart)
     return
 
 
@@ -1334,7 +1334,7 @@ def _(
 
 
 @app.cell(hide_code=True)
-def _(MATCH, STATUSES, T0, T_END, alt, pd, to_pt, with_events):
+def _(MATCH, STATUSES, T0, T_END, alt, fig, pd, to_pt, with_events):
     _m = MATCH[(MATCH.sched_t >= T0 + 900) & (MATCH.sched_t <= T_END - 1800)]
     _s = (_m.assign(b=_m.sched_t // 1800 * 1800).groupby(["b", "status"]).size()
           .unstack(fill_value=0).reindex(columns=STATUSES, fill_value=0))
@@ -1350,27 +1350,27 @@ def _(MATCH, STATUSES, T0, T_END, alt, pd, to_pt, with_events):
     sched_chart = with_events(alt.Chart(_r).mark_rect().encode(
         x=alt.X("x0:T", title="scheduled departure (Nov. 6 time, Pacific)", axis=alt.Axis(format="%-I:%M")), x2="x1:T",
         y=alt.Y("y0:Q", title="% of scheduled flights", scale=alt.Scale(domain=[0, 100])), y2="y1:Q",
-        color=alt.Color("status:N", title=None, sort=STATUSES, legend=alt.Legend(orient="top"),
+        color=alt.Color("status:N", title=None, sort=STATUSES, legend=alt.Legend(orient="top", columns=2),
                         scale=alt.Scale(domain=STATUSES, range=["#2f9e44", "#fab005", "#e8590c", "#868e96"])),
         tooltip=["status:N", alt.Tooltip("x0:T", format="%-I:%M %p", title="scheduled from"), "n:Q",
                  alt.Tooltip("share:Q", format=".0f", title="%")])).properties(width="container", height=240, title=alt.Title(
         "What happened to each scheduled departure (estimated)",
         subtitle="Airline flight numbers that left lower-48 airports at this time on Nov. 6, and what the same flight number did on Nov. 13"))
-    sched_chart
+    fig(sched_chart)
     return
 
 
 @app.cell(hide_code=True)
-def _(COLLAPSE_T, LIFT_T, MATCH, T0, T_END, alt):
+def _(COLLAPSE_T, LIFT_T, MATCH, T0, T_END, alt, fig):
     _d = MATCH[(MATCH.sched_t >= (COLLAPSE_T or T0)) & (MATCH.sched_t < min(LIFT_T, T_END)) & (MATCH.actual_t >= (COLLAPSE_T or T0))]
     _d = _d.assign(h=(_d.delay_min / 60).clip(lower=0, upper=8.99))
     delay_chart = alt.Chart(_d).mark_bar(color="#e8590c").encode(
-        x=alt.X("h:Q", bin=alt.Bin(step=0.5, extent=[0, 9]), title="hours late (8+ grouped)"),
+        x=alt.X("h:Q", bin=alt.Bin(step=0.5, extent=[0, 9]), title="hours late (8+ grouped)", axis=alt.Axis(values=list(range(0, 10)), format="d")),
         y=alt.Y("count():Q", title="flights"),
         tooltip=[alt.Tooltip("count():Q", title="flights")]).properties(width="container", height=200, title=alt.Title(
         "How late the afternoon's flights left",
         subtitle="Lower-48 flights normally departing during the stop that left after the collapse (estimated from Nov. 6 flight numbers)"))
-    delay_chart
+    fig(delay_chart)
     return
 
 
@@ -1569,11 +1569,11 @@ def _():
         return alt.theme.ThemeConfig({"config": {
             "font": "Inter, -apple-system, Segoe UI, sans-serif",
             "view": {"stroke": None},
-            "axis": {"labelFontSize": 11, "titleFontSize": 11, "titleFontWeight": 500, "gridOpacity": 0.35,
+            "axis": {"labelFontSize": 12, "titleFontSize": 12, "titleFontWeight": 500, "gridOpacity": 0.35,
                      "domain": False, "tickColor": "#888", "labelColor": "#777", "titleColor": "#777"},
             "title": {"fontSize": 16, "fontWeight": 700, "anchor": "start", "subtitleFontSize": 12.5,
                       "subtitleColor": "#888", "offset": 12},
-            "legend": {"orient": "top", "labelFontSize": 11.5, "title": None, "symbolStrokeWidth": 3},
+            "legend": {"orient": "top", "labelFontSize": 12, "title": None, "symbolStrokeWidth": 3},
         }})
 
     return (
@@ -1727,11 +1727,11 @@ def _(
     CAT_NOW = (100 * _lat["event"] / _lat["baseline"]).round().dropna().astype(int).to_dict() if "baseline" in _lat else {}
 
     EVENTS = pd.DataFrame(
-        ([{"t": dt.datetime.fromtimestamp(COLLAPSE_T, PT).replace(tzinfo=None), "label": f"departures collapse {fmt_pt(COLLAPSE_T)} ",
-           "color": "#f08c00", "align": "right", "hud": f"Departures collapsing ({fmt_pt(COLLAPSE_T)} PT)"}] if COLLAPSE_T else [])
-        + [{"t": GROUND_STOP, "label": " FAA ground stop 12:54 p.m. PT", "color": "#e03131", "align": "left",
+        ([{"t": dt.datetime.fromtimestamp(COLLAPSE_T, PT).replace(tzinfo=None), "label": f"collapse {fmt_pt(COLLAPSE_T).split()[0]}",
+           "color": "#f08c00", "align": "right", "row": 0, "hud": f"Departures collapsing ({fmt_pt(COLLAPSE_T)} PT)"}] if COLLAPSE_T else [])
+        + [{"t": GROUND_STOP, "label": "FAA stop 12:54", "color": "#e03131", "align": "left", "row": 0,
             "hud": "FAA nationwide ground stop in effect"}]
-        + ([{"t": LIFT, "label": " stop lifted 5:15 p.m.", "color": "#2f9e44", "align": "left",
+        + ([{"t": LIFT, "label": "lifted 5:15", "color": "#2f9e44", "align": "left", "row": 1,
              "hud": "Ground stop lifted (5:15 p.m. PT)"}] if LIFT_T <= T_END else []))
     return (
         AFTER_RATE,
@@ -2176,9 +2176,10 @@ def _(
 
 
 @app.cell(hide_code=True)
-def _(EVENTS, PT, alt, dt, pd):
+def _(EVENTS, PT, alt, dt, mo, pd):
     def with_events(chart, lo=None, hi=None):
-        """Layer the EVENTS markers (dashed rule + label) on a chart whose x is time_pt; lo/hi (unix) limit which show."""
+        """Layer the EVENTS markers (dashed rule + short label) on a chart whose x is time_pt; lo/hi (unix) limit which show.
+        Labels sit in rows (EVENTS.row) so neighbouring markers never collide, even on a phone."""
         layers = [chart]
         _lo = dt.datetime.fromtimestamp(lo, PT).replace(tzinfo=None) if lo else None
         _hi = dt.datetime.fromtimestamp(hi, PT).replace(tzinfo=None) if hi else None
@@ -2187,11 +2188,49 @@ def _(EVENTS, PT, alt, dt, pd):
                 continue
             _d = pd.DataFrame([e])
             layers.append(alt.Chart(_d).mark_rule(color=e["color"], strokeWidth=1.5, strokeDash=[5, 3]).encode(x="t:T"))
-            layers.append(alt.Chart(_d).mark_text(color=e["color"], align=e["align"], baseline="top", fontSize=11, fontWeight="bold")
-                          .encode(x="t:T", y=alt.value(4), text="label:N"))
+            layers.append(alt.Chart(_d).mark_text(color=e["color"], align=e["align"], baseline="top", fontSize=12,
+                                                  fontWeight="bold", dx=4 if e["align"] == "left" else -4)
+                          .encode(x="t:T", y=alt.value(4 + 16 * e.get("row", 0)), text="label:N"))
         return alt.layer(*layers)
 
-    return (with_events,)
+
+    def _title_parts(ch):
+        t = getattr(ch, "title", alt.Undefined)
+        if t is alt.Undefined or t is None:
+            return "", ""
+        if isinstance(t, str):
+            return t, ""
+        d = t.to_dict() if hasattr(t, "to_dict") else dict(t)
+        j = lambda v: " ".join(v) if isinstance(v, list) else (v if isinstance(v, str) else "")
+        return j(d.get("text", "")), j(d.get("subtitle", ""))
+
+
+    def fig(chart, title=None, subtitle=None):
+        """Chart with its title and subtitle as HTML (wraps on phones), centered in the report column.
+        vconcat -> panels stacked full width; hconcat/concat -> fixed-width panels that wrap on narrow screens."""
+        t0, s0 = _title_parts(chart)
+        title, subtitle = title or t0, subtitle if subtitle is not None else s0
+        if isinstance(chart, alt.VConcatChart):
+            parts, multi = list(chart.vconcat), False
+        elif isinstance(chart, alt.HConcatChart):
+            parts, multi = list(chart.hconcat), True
+        elif isinstance(chart, alt.ConcatChart):
+            parts, multi = list(chart.concat), True
+        else:
+            parts, multi = [chart], False
+        html = []
+        for p in parts:
+            if p is not chart and multi is False and _title_parts(p)[0] == "":
+                pass
+            q = p.copy(deep=False)
+            if p is chart:
+                q.title = alt.Undefined
+            html.append(mo.as_html(q).text)
+        body = ('<div class="er-multi">' + "".join(f"<div>{h}</div>" for h in html) + "</div>") if multi else "".join(html)
+        return mo.Html(f'<div class="er-fig"><div class="er-fig-t">{title}</div>'
+                       + (f'<div class="er-fig-s">{subtitle}</div>' if subtitle else "") + body + "</div>")
+
+    return fig, with_events
 
 
 @app.cell(hide_code=True)

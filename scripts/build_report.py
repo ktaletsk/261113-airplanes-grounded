@@ -1425,6 +1425,196 @@ day earlier, and those that flew stayed lower: {BJ_HIGH["event"]}% of their posi
 
 C["findings7"] = f'OSINT_POST = "{OSINT_POST}"\n' + C["findings7"]
 
+
+# ---------------------------------------------------------------- layout pass: HTML titles, centered column, responsive charts
+C["events_fn"] = r'''def with_events(chart, lo=None, hi=None):
+    """Layer the EVENTS markers (dashed rule + short label) on a chart whose x is time_pt; lo/hi (unix) limit which show.
+    Labels sit in rows (EVENTS.row) so neighbouring markers never collide, even on a phone."""
+    layers = [chart]
+    _lo = dt.datetime.fromtimestamp(lo, PT).replace(tzinfo=None) if lo else None
+    _hi = dt.datetime.fromtimestamp(hi, PT).replace(tzinfo=None) if hi else None
+    for e in EVENTS.to_dict("records"):
+        if (_lo and e["t"] < _lo) or (_hi and e["t"] > _hi):
+            continue
+        _d = pd.DataFrame([e])
+        layers.append(alt.Chart(_d).mark_rule(color=e["color"], strokeWidth=1.5, strokeDash=[5, 3]).encode(x="t:T"))
+        layers.append(alt.Chart(_d).mark_text(color=e["color"], align=e["align"], baseline="top", fontSize=12,
+                                              fontWeight="bold", dx=4 if e["align"] == "left" else -4)
+                      .encode(x="t:T", y=alt.value(4 + 16 * e.get("row", 0)), text="label:N"))
+    return alt.layer(*layers)
+
+
+def _title_parts(ch):
+    t = getattr(ch, "title", alt.Undefined)
+    if t is alt.Undefined or t is None:
+        return "", ""
+    if isinstance(t, str):
+        return t, ""
+    d = t.to_dict() if hasattr(t, "to_dict") else dict(t)
+    j = lambda v: " ".join(v) if isinstance(v, list) else (v if isinstance(v, str) else "")
+    return j(d.get("text", "")), j(d.get("subtitle", ""))
+
+
+def fig(chart, title=None, subtitle=None):
+    """Chart with its title and subtitle as HTML (wraps on phones), centered in the report column.
+    vconcat -> panels stacked full width; hconcat/concat -> fixed-width panels that wrap on narrow screens."""
+    t0, s0 = _title_parts(chart)
+    title, subtitle = title or t0, subtitle if subtitle is not None else s0
+    if isinstance(chart, alt.VConcatChart):
+        parts, multi = list(chart.vconcat), False
+    elif isinstance(chart, alt.HConcatChart):
+        parts, multi = list(chart.hconcat), True
+    elif isinstance(chart, alt.ConcatChart):
+        parts, multi = list(chart.concat), True
+    else:
+        parts, multi = [chart], False
+    html = []
+    for p in parts:
+        if p is not chart and multi is False and _title_parts(p)[0] == "":
+            pass
+        q = p.copy(deep=False)
+        if p is chart:
+            q.title = alt.Undefined
+        html.append(mo.as_html(q).text)
+    body = ('<div class="er-multi">' + "".join(f"<div>{h}</div>" for h in html) + "</div>") if multi else "".join(html)
+    return mo.Html(f'<div class="er-fig"><div class="er-fig-t">{title}</div>'
+                   + (f'<div class="er-fig-s">{subtitle}</div>' if subtitle else "") + body + "</div>")'''
+
+# event labels: short, in rows
+_ev_old = """    ([{"t": dt.datetime.fromtimestamp(COLLAPSE_T, PT).replace(tzinfo=None), "label": f"departures collapse {fmt_pt(COLLAPSE_T)} ",
+       "color": "#f08c00", "align": "right", "hud": f"Departures collapsing ({fmt_pt(COLLAPSE_T)} PT)"}] if COLLAPSE_T else [])
+    + [{"t": GROUND_STOP, "label": " FAA ground stop 12:54 p.m. PT", "color": "#e03131", "align": "left",
+        "hud": "FAA nationwide ground stop in effect"}]
+    + ([{"t": LIFT, "label": " stop lifted 5:15 p.m.", "color": "#2f9e44", "align": "left",
+         "hud": "Ground stop lifted (5:15 p.m. PT)"}] if LIFT_T <= T_END else []))"""
+assert _ev_old in C["findings"], "events"
+C["findings"] = C["findings"].replace(_ev_old, """    ([{"t": dt.datetime.fromtimestamp(COLLAPSE_T, PT).replace(tzinfo=None), "label": f"collapse {fmt_pt(COLLAPSE_T).split()[0]}",
+       "color": "#f08c00", "align": "right", "row": 0, "hud": f"Departures collapsing ({fmt_pt(COLLAPSE_T)} PT)"}] if COLLAPSE_T else [])
+    + [{"t": GROUND_STOP, "label": "FAA stop 12:54", "color": "#e03131", "align": "left", "row": 0,
+        "hud": "FAA nationwide ground stop in effect"}]
+    + ([{"t": LIFT, "label": "lifted 5:15", "color": "#2f9e44", "align": "left", "row": 1,
+         "hud": "Ground stop lifted (5:15 p.m. PT)"}] if LIFT_T <= T_END else []))""")
+
+def _sub(key, a, b, count=1):
+    assert a in C[key], (key, a[:60])
+    C[key] = C[key].replace(a, b, count)
+
+# theme: 12 px minimum text
+_sub("imports", '"axis": {"labelFontSize": 11, "titleFontSize": 11,', '"axis": {"labelFontSize": 12, "titleFontSize": 12,')
+_sub("imports", '"legend": {"orient": "top", "labelFontSize": 11.5,', '"legend": {"orient": "top", "labelFontSize": 12,')
+
+# sizes: single views fill the column; small multiples get panel widths that wrap
+_sub("recovery_chart", ").properties(width=880, height=210)", ").properties(width=\"container\", height=210)")
+_sub("hubs_chart", ".properties(width=620, height=alt.Step(22),", ".properties(width=\"container\", height=alt.Step(22),")
+_sub("zones_chart", "properties(width=205, height=150,", "properties(width=165, height=140,")
+_sub("states_chart", "properties(width=280, height=170,", "properties(width=250, height=170,")
+_sub("neighbors_chart", "properties(width=430, height=200,", "properties(width=300, height=200,")
+C["alt_chart"] = C["alt_chart"].replace("width=430", 'width="container"').replace(
+    "alt_chart = alt.hconcat(_stack, _rel)", "alt_chart = alt.vconcat(_stack, _rel)")
+_sub("tarmac_chart", "_left = alt.layer(_bars, _txt).properties(width=300,", '_left = alt.layer(_bars, _txt).properties(width="container",')
+_sub("tarmac_chart", ".properties(width=400, height=260,", '.properties(width="container", height=260,')
+_sub("tarmac_chart", "tarmac_chart = alt.hconcat(_left, _right)", "tarmac_chart = alt.vconcat(_left, _right)")
+
+# maps: fit the projection to a fixed box so they scale with the column width
+_CONUS = ('{"type": "FeatureCollection", "features": [{"type": "Feature", "properties": {}, "geometry": {"type": "Polygon", '
+          '"coordinates": [[[-124.8, 24.4], [-124.8, 49.4], [-66.9, 49.4], [-66.9, 24.4], [-124.8, 24.4]]]}}]}')
+_sub("origin_map", '.project(type="albersUsa").properties(\n    width="container", height=430,',
+     f'.project(type="albersUsa", fit={_CONUS}).properties(\n    width="container", height=380,')
+_sub("airspace_map", '"type": "Polygon", "coordinates": [[[-135, 18], [-135, 55], [-55, 55], [-55, 18], [-135, 18]][::-1]]}}]}',
+     '"type": "Polygon", "coordinates": [[[-128, 21], [-128, 53], [-62, 53], [-62, 21], [-128, 21]]]}}]}')
+_sub("airspace_map", '_proj = dict(type="mercator", center=[-100, 44], scale=620)', '_proj = dict(type="mercator", fit=_bbox)')
+_sub("airspace_map", 'width="container", height=440,', 'width="container", height=400,')
+
+# gateway chart: dumbbell (grey = Nov. 12, colored = Nov. 13 during the stop)
+C["gateway_chart"] = r"""_d = GATEWAYS.head(16).copy()
+_order = _d.sort_values(["kind", "nov12"], ascending=[True, False]).apt.tolist()
+_y = alt.Y("apt:N", sort=_order, title=None)
+_rule = alt.Chart(_d).mark_rule(color="#868e96", strokeWidth=2).encode(y=_y, x="nov12:Q", x2="nov13:Q")
+_was = alt.Chart(_d).mark_circle(size=70, color="#adb5bd", opacity=1).encode(
+    y=_y, x=alt.X("nov12:Q", title="wide-body departures during the stop hours"),
+    tooltip=["apt:N", alt.Tooltip("nov12:Q", title="Nov. 12, same hours")])
+_now = alt.Chart(_d).mark_circle(size=110, opacity=1).encode(
+    y=_y, x="nov13:Q",
+    color=alt.Color("kind:N", title=None, scale=alt.Scale(domain=["coastal gateway", "inland hub"], range=["#1c7ed6", "#e8590c"]),
+                    legend=alt.Legend(orient="top")),
+    tooltip=["apt:N", "kind:N", alt.Tooltip("nov13:Q", title="Nov. 13, during the stop")])
+gateway_chart = alt.layer(_rule, _was, _now).properties(width="container", height=alt.Step(20), title=alt.Title(
+    "Coastal gateways kept sending long-haul flights; inland hubs mostly didn't",
+    subtitle="Wide-body airline departures between the collapse and the lift: colored dot = Nov. 13, grey dot = same hours on Nov. 12"))
+gateway_chart"""
+
+# smoother category ratios (30-minute window), so small evening counts don't spike
+_sub("category_chart", "_c = counts[counts.t % 600 == 0]",
+     '_c = counts.sort_values("t").copy()\n_c["n"] = _c.groupby(["period", "category"]).n.transform(lambda s: s.rolling(30, min_periods=10).mean())\n_c = _c[_c.t % 600 == 0]')
+_sub("category_chart", 'subtitle="Aircraft airborne by category, as a share of the same time a day earlier"',
+     'subtitle="Aircraft airborne by category (30-minute average), as a share of the same time a day earlier"')
+
+
+# ---- layout pass, round 2
+_PTS = lambda w, s_, e, n: ('{"type": "FeatureCollection", "features": [{"type": "Feature", "properties": {}, "geometry": '
+                            f'{{"type": "MultiPoint", "coordinates": [[{w}, {s_}], [{e}, {n}]]}}}}]}}')
+C["origin_map"] = C["origin_map"].replace(
+    C["origin_map"][C["origin_map"].index('fit={"type"'):C["origin_map"].index('}).properties(\n    width="container", height=380,') + 1],
+    "fit=" + _PTS(-124.8, 24.4, -66.9, 49.4))
+_sub("airspace_map", '"type": "Polygon", "coordinates": [[[-128, 21], [-128, 53], [-62, 53], [-62, 21], [-128, 21]]]}}]}',
+     '"type": "MultiPoint", "coordinates": [[-128, 21], [-62, 53]]}}]}')
+# only ORD and MDW labelled on the map (STL's label collides on phones)
+_sub("origin_map", '_d["label"] = np.where(_d.index < 3, _d.apt + " " + _d.when, np.where(_d.apt.isin(["MDW"]), _d.apt + " " + _d.when, ""))',
+     '_d["label"] = np.where(_d.apt.isin(["ORD", "MDW"]), _d.apt + " " + _d.when, "")')
+# two small multiples per row on a phone
+_sub("origin_grid", "properties(width=150, height=80,", "properties(width=118, height=80,")
+_sub("zones_chart", "properties(width=165, height=140,", "properties(width=118, height=130,")
+_sub("neighbors_chart", "properties(width=300, height=200,", "properties(width=255, height=200,")
+_sub("states_chart", "properties(width=250, height=170,", "properties(width=240, height=170,")
+# legends that wrap instead of clipping; top chart explains line styles in its subtitle
+_sub("recovery_chart", 'legend=alt.Legend(orient="top") if legend else None', "legend=None")
+_sub("recovery_chart", 'subtitle="U.S. airline departures and aircraft in the air, Pacific time · bold: Nov. 13 · faint dashed: Nov. 12 · faint dotted: Nov. 6, a normal Friday"',
+     'subtitle="U.S. airline departures (top) and aircraft in the air (bottom), Pacific time. Bold line: Nov. 13; faint dashed: Nov. 12; faint dotted: Nov. 6, a normal Friday"')
+_sub("backlog_chart", 'legend=alt.Legend(orient="top"),', 'legend=alt.Legend(orient="top", columns=2),')
+_sub("sched_chart", 'legend=alt.Legend(orient="top"),', 'legend=alt.Legend(orient="top", columns=2),')
+_sub("category_chart", 'color=alt.Color("category:N", title=None, sort=CATS),', 'color=alt.Color("category:N", title=None, sort=CATS, legend=alt.Legend(orient="top", columns=3)),')
+_sub("hubs_chart", 'scale=alt.Scale(range=["#1c7ed6", "#e03131"])),', 'scale=alt.Scale(range=["#1c7ed6", "#e03131"]), legend=alt.Legend(orient="top", columns=2, title=None)),')
+# restart chart: lag label below the event labels
+_sub("restart_chart", 'baseline="bottom").encode(x="mid:T", y=alt.value(40), text="label:N")', 'baseline="top").encode(x="mid:T", y=alt.value(40), text="label:N")')
+# histogram: whole-hour ticks
+_sub("delay_chart", 'x=alt.X("h:Q", bin=alt.Bin(step=0.5, extent=[0, 9]), title="hours late (8+ grouped)"),',
+     'x=alt.X("h:Q", bin=alt.Bin(step=0.5, extent=[0, 9]), title="hours late (8+ grouped)", axis=alt.Axis(values=list(range(0, 10)), format="d")),')
+# tarmac: one HTML heading for the pair
+_sub("tarmac_chart", '_left = alt.layer(_bars, _txt).properties(width="container", height=alt.Step(18), title=alt.Title(\n    "Where the planes piled up", subtitle="Aircraft on the ground (transponder on), average during the stop vs. the same morning; label = peak"))',
+     '_left = alt.layer(_bars, _txt).properties(width="container", height=alt.Step(18))')
+_sub("tarmac_chart", "tarmac_chart = alt.vconcat(_left, _right)",
+     'tarmac_chart = alt.vconcat(_left, _right).properties(title=alt.Title("Where the planes piled up", subtitle="Aircraft on the ground (transponder on): average during the stop as a multiple of the same morning; label = peak count. Below: the top airport through the day"))')
+_sub("alt_chart", 'alt_chart = alt.vconcat(_stack, _rel)', 'alt_chart = alt.vconcat(_stack, _rel).properties(title=alt.Title("Airborne by altitude band", subtitle="Aircraft over the U.S. on Nov. 13, Pacific time: counts (top) and each band as a share of its late-morning level (bottom)"))')
+
+
+# ---- layout pass, round 3
+for _a, _b in [('mark_geoshape(fill="#e8590c",', 'mark_geoshape(clip=True, fill="#e8590c",'),
+               ('mark_geoshape(fill=None, stroke="#6c757d",', 'mark_geoshape(clip=True, fill=None, stroke="#6c757d",'),
+               ('    color="#e8590c", fontSize=9, opacity=0.8)', '    color="#e8590c", fontSize=10, opacity=0.8, clip=True)'),
+               ('mark_line(strokeWidth=2.2).encode(\n    longitude="lon:Q"', 'mark_line(strokeWidth=2.2, clip=True).encode(\n    longitude="lon:Q"'),
+               ('mark_text(fontSize=11, fontWeight="bold", color="#f1f3f5", dy=-9)', 'mark_text(fontSize=12, fontWeight="bold", color="#f1f3f5", dy=-9, clip=True)')]:
+    _sub("airspace_map", _a, _b)
+# small multiples narrow enough for two per row on a phone (each panel also carries marimo's menu button)
+_sub("origin_grid", "properties(width=118, height=80,", "properties(width=96, height=80,")
+_sub("zones_chart", "properties(width=118, height=130,", "properties(width=96, height=120,")
+
+# every chart cell ends with fig(<chart>)
+import re as _re
+for _k in list(C):
+    if not C[_k]:
+        continue
+    _lines = C[_k].rstrip().split("\n")
+    if _re.fullmatch(r"[a-z_]+_(chart|map|grid)", _lines[-1].strip()):
+        _lines[-1] = f"fig({_lines[-1].strip()})"
+        C[_k] = "\n".join(_lines)
+
+# styles for the figure blocks
+_sub("style", "  .er-databar {", """  .er-fig { max-width: 880px; margin: 30px auto 6px; }
+  .er-fig-t { font: 700 18px/1.3 Inter, sans-serif; margin: 0 0 4px; }
+  .er-fig-s { font: 400 13.5px/1.45 Inter, sans-serif; opacity: .7; margin: 0 0 12px; }
+  .er-multi { display: flex; flex-wrap: wrap; gap: 10px 14px; justify-content: center; }
+  .er-databar {""")
+
 for _k, _needle in [("config", "GROUND_STOP_T"), ("helpers", '"lat", "lon", "cs"]].assign'), ("config", "CATS ="),
                     ("load", "Fetching the latest")]:
     assert _needle in C[_k], (_k, _needle)
@@ -1432,7 +1622,7 @@ assert "EVENTS = pd.DataFrame" not in C["config"]
 
 ORDER = ["style", "header", "load", "summary_stats", "recovery_chart", "s_intro",
          "part1", "lede", "s_cliff", "cliff_chart", "s_origin", "origin_map", "origin_grid", "s_where2", "zones_chart", "hubs_chart",
-         "s_landings", "airborne_chart", "moves_chart", "s_alt", "alt_chart", "s_wyoming", "wy_chart",
+         "s_landings", "moves_chart", "s_alt", "alt_chart", "s_wyoming", "wy_chart",
          "s_map2", "map_controls", "map",
          "part2", "s_who", "category_chart", "s_bizjet", "s_states", "states_chart", "s_intl", "intl_chart", "s_gateways", "gateway_chart", "airspace_map",
          "s_neighbors", "neighbors_chart", "s_tarmac", "tarmac_chart",
