@@ -1,0 +1,75 @@
+name: Build data snapshot and publish
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  schedule:
+    # adsb.lol publishes each half-hour file roughly 30-60 minutes after it ends
+    - cron: "10,40 * * * *"
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.window.outputs.run }}
+    steps:
+      - id: window
+        # scheduled refreshes stop once the 24-hour window (to 10:00 PT Nov 14) is fully published
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "schedule" ] && [ "$(date -u +%s)" -gt "$(date -u -d 2026-11-14T21:00:00Z +%s)" ]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: check
+    if: needs.check.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Restore processed half-hour files (marimo persistent cache)
+        uses: actions/cache@v4
+        with:
+          path: __marimo__/cache
+          key: marimo-cache-${{ github.run_id }}
+          restore-keys: marimo-cache-
+
+      - name: Build the data snapshot
+        env:
+          EMPTY_SKIES_EXPORT: public/bundle.npz
+        run: uv run --quiet grounded.py
+
+      - name: Export the notebook to WebAssembly
+        run: |
+          uvx marimo@0.25.2 export html-wasm grounded.py -o _site --mode run
+          rm -f _site/CLAUDE.md
+          ls -la _site _site/public
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

@@ -1,0 +1,23 @@
+.fm-root { position: relative; width: 100%; height: 620px; background: #1b1d21; border-radius: 8px; overflow: hidden;
+  font-family: ui-sans-serif, -apple-system, "Segoe UI", sans-serif; color: #dfe7ef; user-select: none; }
+.fm-root canvas.fm-map { position: absolute; inset: 0; width: 100%; height: 100%; cursor: grab; }
+.fm-root canvas.fm-map:active { cursor: grabbing; }
+.fm-hud { position: absolute; top: 10px; left: 12px; background: rgba(8, 16, 26, .82); padding: 8px 12px; border-radius: 6px;
+  font-size: 13px; line-height: 1.45; pointer-events: none; }
+.fm-hud .fm-clock { font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; color: #fff; }
+.fm-hud .fm-count { font-size: 15px; color: #ffd84a; font-variant-numeric: tabular-nums; }
+.fm-legend { position: absolute; top: 10px; right: 12px; background: rgba(8, 16, 26, .82); padding: 8px 12px; border-radius: 6px;
+  font-size: 12px; line-height: 1.6; }
+.fm-legend span.sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+.fm-bar { position: absolute; left: 0; right: 0; bottom: 0; display: flex; align-items: center; gap: 10px; padding: 10px 14px;
+  background: linear-gradient(transparent, rgba(5, 10, 18, .95) 40%); }
+.fm-bar button { background: #1f6feb; color: #fff; border: 0; border-radius: 5px; padding: 5px 10px; font-size: 13px; cursor: pointer;
+  min-width: 34px; }
+.fm-bar button.fm-ghost { background: #253445; }
+.fm-bar input[type=range] { flex: 1; accent-color: #ffd84a; }
+.fm-bar select { background: #253445; color: #dfe7ef; border: 0; border-radius: 5px; padding: 4px; font-size: 12px; }
+.fm-root canvas.fm-spark { position: absolute; left: 14px; bottom: 52px; width: calc(100% - 28px); height: 44px; pointer-events: none; }
+.fm-tip { position: absolute; pointer-events: none; background: rgba(8, 16, 26, .92); border: 1px solid #34495e; border-radius: 5px;
+  padding: 5px 8px; font-size: 12px; white-space: nowrap; display: none; }
+.fm-hud .fm-event { font-weight: 600; margin-top: 2px; }
+.fm-hud .fm-event:empty { display: none; }

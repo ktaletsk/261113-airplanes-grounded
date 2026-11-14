@@ -1,0 +1,8 @@
+# downloaded / derived data (the notebook fetches what it needs)
+data/
+public/
+__marimo__/
+_site/
+media/
+__pycache__/
+.DS_Store
