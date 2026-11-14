@@ -39,8 +39,11 @@ aircraft per minute inside the US (CONUS, Alaska, Hawaii boxes), and compares th
 """)'''
 
 C["config"] = r'''WINDOW_START = dt.datetime(2026, 11, 13, 18, 0, tzinfo=dt.timezone.utc)   # 10:00 PT on the ground-stop day
+LOAD_START = WINDOW_START - dt.timedelta(hours=2)    # 2 h of lead-in so early departures can be matched to flight numbers
 MAX_HOURS = 24                       # stop downloading this many hours after WINDOW_START
 BASELINE_SHIFT = 86400               # compare with the same clock time one day earlier
+SHIFTS = {"event": 0, "baseline": BASELINE_SHIFT, "week": 7 * 86400}   # "week" = Nov 6, a normal Friday
+WEEK_LABEL = "Nov 6 (a normal Friday)"
 WORKERS = 6                          # parallel downloads (be gentle with adsb.lol)
 PERIOD_LABEL = {"event": "Nov 13 (ground stop)", "baseline": "Nov 12 (day before)"}
 CATS = ["Airline", "Business jet", "General aviation", "Helicopter", "Other"]
@@ -53,7 +56,8 @@ EVENTS = pd.DataFrame([
      "hud": "FAA nationwide ground stop in effect"},
 ])
 
-refresh_btn = mo.ui.run_button(label="Fetch newest data", kind="neutral")'''
+# The published notebook is static: it always opens the snapshot in public/bundle.npz.
+# Rebuild that snapshot with scripts/update_snapshot.sh (sets EMPTY_SKIES_EXPORT and runs the raw-data pipeline).'''
 
 C["helpers"] = r'''# ---- adsb.lol readsb heatmap decoding -------------------------------------------------------------
 # One gzip file per 30-min UTC slot: little-endian int32 quads.
@@ -114,7 +118,7 @@ def decode_heatmap(raw):
     is_cs = ~magic & (a[:, 1] >= 1 << 30) & (sid >= 0)
     is_pos = ~magic & (a[:, 1] < 1 << 30) & (sid >= 0)
     cs_bytes = a[is_cs][:, 2:4].copy().view(np.uint8).reshape(-1, 8)
-    calls = pd.DataFrame({"hex": hexv[is_cs],
+    calls = pd.DataFrame({"t": slice_t[sid[is_cs]], "hex": hexv[is_cs],
                           "callsign": [bytes(b).split(b"\x00")[0].decode("ascii", "replace").strip() for b in cs_bytes]})
     alt16 = (a[is_pos, 3] & 0xFFFF).astype(np.uint16).view(np.int16)
     pos = pd.DataFrame({
@@ -141,9 +145,12 @@ def load_slot(slot_start: str):
     la, lo = pos.lat.values, pos.lon.values
     pos = pos[(la >= NA_BBOX[0]) & (la <= NA_BBOX[1]) & (lo >= NA_BBOX[2]) & (lo <= NA_BBOX[3])]
     pos["minute"] = (pos.t // 60 * 60).astype(np.int64)
-    pos = pos.sort_values("t").drop_duplicates(["hex", "minute"], keep="last").drop(columns="t")
-    calls = calls[calls.callsign != ""].drop_duplicates("hex", keep="last")
-    return pos, calls
+    pos = pos.sort_values("t").drop_duplicates(["hex", "minute"], keep="last")
+    calls = calls[calls.callsign != ""].sort_values("t")
+    # flight number at that moment: nearest callsign broadcast by the same aircraft (aircraft fly several legs a day)
+    pos = pd.merge_asof(pos, calls.rename(columns={"callsign": "cs"}), on="t", by="hex",
+                        direction="nearest", tolerance=900).drop(columns="t")
+    return pos, calls.drop(columns="t").drop_duplicates("hex", keep="last")
 
 
 @mo.persistent_cache
@@ -283,6 +290,7 @@ def region_of(country, lat, lon):
 
 
 PERIODS, KINDS = ["event", "baseline"], ["takeoff", "landing"]
+ALL_PERIODS = ["event", "baseline", "week"]
 COUNTRIES, REGIONS = ["US", "Canada", "Mexico"], ["Lower 48", "Alaska", "Hawaii", "Canada", "Mexico"]
 
 
@@ -290,14 +298,15 @@ def _codes(values, cats):
     return pd.Categorical(pd.Series(values).astype(str), categories=cats).codes.astype(np.int8)
 
 
-def pack_bundle(path, snap, aircraft, counts, moves_all, meta, steps=None):
+def pack_bundle(path, snap, aircraft, counts, moves_all, meta, steps=None, t0=None, airports=None, airspace=None):
     """Compact snapshot for the browser build. Map positions are kept every steps[period] minutes,
     quantized (~100-200 m) and delta-encoded along each aircraft's track; the per-minute counts and
     takeoff/landing events (which need full 1-minute tracks) are shipped precomputed."""
     steps = steps or {"event": 2, "baseline": 4}
     keep = np.zeros(len(snap), dtype=bool)
+    _t0 = t0 if t0 is not None else -np.inf
     for per, st in steps.items():
-        keep |= (snap.period.values == per) & (snap.minute.values % (60 * st) == 0)
+        keep |= (snap.period.values == per) & (snap.minute.values % (60 * st) == 0) & (snap.t.values >= _t0)
     s = snap[keep].sort_values(["period", "hex", "minute"])
     ac = aircraft[aircraft.hex.isin(s.hex.unique())]
     m = moves_all
@@ -310,12 +319,18 @@ def pack_bundle(path, snap, aircraft, counts, moves_all, meta, steps=None):
         "s_hdg": (s.heading.values.astype(np.int32) * 256 // 360).astype(np.uint8),
         "s_cat": _codes(s.category, CATS), "s_country": _codes(s.country, COUNTRIES), "s_region": _codes(s.region, REGIONS),
         "a_hex": ac.hex.astype(np.int32), "a_cs": ustr(ac.callsign, 8), "a_type": ustr(ac.type, 4), "a_cat": _codes(ac.category, CATS),
-        "c_period": _codes(counts.period, PERIODS), "c_cat": _codes(counts.category, CATS),
+        "c_period": _codes(counts.period, ALL_PERIODS), "c_cat": _codes(counts.category, CATS),
         "c_t": (counts.t // 60).astype(np.int32), "c_n": counts.n.astype(np.int32),
-        "m_period": _codes(m.period, PERIODS), "m_min": (m.minute // 60).astype(np.int32), "m_hex": m.hex.astype(np.int32),
+        "m_period": _codes(m.period, ALL_PERIODS), "m_min": (m.minute // 60).astype(np.int32), "m_hex": m.hex.astype(np.int32),
         "m_cat": _codes(m.category, CATS), "m_lat": m.lat.astype(np.float32), "m_lon": m.lon.astype(np.float32),
         "m_kind": _codes(m.kind, KINDS), "m_country": _codes(m.country, COUNTRIES), "m_region": _codes(m.region, REGIONS),
-        "meta": np.frombuffer(json.dumps({**meta, "map_step": steps}).encode(), dtype=np.uint8),
+        "m_csv": np.asarray(_csv := sorted(set(m.cs.dropna().astype(str))), dtype="U8"),
+        "m_cs": pd.Categorical(m.cs.astype(object), categories=_csv).codes.astype(np.int32),
+        "meta": np.frombuffer(json.dumps({**meta, "map_step": steps, "airspace": airspace or []}).encode(), dtype=np.uint8),
+        "ap_code": np.asarray(airports.code.tolist() if airports is not None else [], dtype="U4"),
+        "ap_name": np.asarray(airports.name.str[:60].tolist() if airports is not None else [], dtype="U60"),
+        "ap_lat": np.asarray(airports.lat if airports is not None else [], dtype=np.float32),
+        "ap_lon": np.asarray(airports.lon if airports is not None else [], dtype=np.float32),
     }
     np.savez_compressed(path, **{k: np.asarray(v) for k, v in arrays.items()})
 
@@ -334,19 +349,23 @@ def unpack_bundle(raw):
         "heading": (z["s_hdg"].astype(np.int32) * 360 // 256).astype(np.int16),
         "country": pd.Categorical(pick(z["s_country"], COUNTRIES)), "region": pd.Categorical(pick(z["s_region"], REGIONS)),
     })
-    snap["t"] = snap.minute + np.where(snap.period == "baseline", BASELINE_SHIFT, 0)
+    snap["t"] = snap.minute + snap.period.map(SHIFTS).astype(np.int64)
     aircraft = pd.DataFrame({"hex": z["a_hex"], "callsign": z["a_cs"].astype(object), "type": z["a_type"].astype(object),
                              "category": pick(z["a_cat"], CATS)})
-    counts = pd.DataFrame({"period": pick(z["c_period"], PERIODS), "category": pick(z["c_cat"], CATS),
+    counts = pd.DataFrame({"period": pick(z["c_period"], ALL_PERIODS), "category": pick(z["c_cat"], CATS),
                            "t": z["c_t"].astype(np.int64) * 60, "n": z["c_n"]})
-    m_period = pick(z["m_period"], PERIODS)
+    m_period = pick(z["m_period"], ALL_PERIODS)
     m_minute = z["m_min"].astype(np.int64) * 60
     moves_all = pd.DataFrame({
-        "minute": m_minute, "t": m_minute + np.where(m_period == "baseline", BASELINE_SHIFT, 0), "period": m_period,
+        "minute": m_minute, "t": m_minute + pd.Series(m_period).map(SHIFTS).values.astype(np.int64), "period": m_period,
         "hex": z["m_hex"], "category": pick(z["m_cat"], CATS), "lat": z["m_lat"], "lon": z["m_lon"],
         "kind": pick(z["m_kind"], KINDS), "country": pick(z["m_country"], COUNTRIES), "region": pick(z["m_region"], REGIONS),
+        "cs": np.where(z["m_cs"] >= 0, np.append(z["m_csv"], "").astype(object)[z["m_cs"]], None),
     })
-    return snap, aircraft, {"counts": counts, "moves": moves_all}, meta
+    airports = pd.DataFrame({"code": z["ap_code"].astype(str), "name": z["ap_name"].astype(str),
+                             "lat": z["ap_lat"], "lon": z["ap_lon"]}) if "ap_code" in z.files else pd.DataFrame(
+        columns=["code", "name", "lat", "lon"])
+    return snap, aircraft, {"counts": counts, "moves": moves_all, "airports": airports}, meta
 
 
 def read_bundle():
@@ -364,6 +383,65 @@ async def load_bundle(url):
     return unpack_bundle(await resp.bytes())
 
 
+AIRPORTS_URL = "https://davidmegginson.github.io/ourairports-data/airports.csv"
+AIRSPACE_URL = "https://raw.githubusercontent.com/vatsimnetwork/vatspy-data-project/master/Boundaries.geojson"
+
+
+@mo.persistent_cache
+def load_airports():
+    """US airports with scheduled service (OurAirports): IATA code, name, position."""
+    a = pd.read_csv(io.BytesIO(local_or_fetch("airports.csv", AIRPORTS_URL)), low_memory=False,
+                    usecols=["type", "name", "latitude_deg", "longitude_deg", "iso_country", "scheduled_service", "iata_code"])
+    a = a[(a.iso_country == "US") & a.type.isin(["large_airport", "medium_airport"])
+          & (a.scheduled_service == "yes") & a.iata_code.notna()]
+    return pd.DataFrame({"code": a.iata_code.values.astype(str), "name": a.name.values.astype(str),
+                         "lat": a.latitude_deg.values.astype(np.float32), "lon": a.longitude_deg.values.astype(np.float32)})
+
+
+@mo.persistent_cache
+def load_airspace():
+    """Simplified boundaries of the lower-48 en-route centers (ARTCCs) from the VATSpy data project, as GeoJSON features."""
+    d = json.loads(local_or_fetch("airspace.geojson", AIRSPACE_URL))
+    feats = []
+    for f in d["features"]:
+        i, oce = str(f["properties"].get("id", "")), str(f["properties"].get("oceanic")) == "1"
+        if not i.startswith("KZ") or "-" in i or oce or i == "KZAK":
+            continue
+        polys = f["geometry"]["coordinates"] if f["geometry"]["type"] == "MultiPolygon" else [f["geometry"]["coordinates"]]
+        out = []
+        for poly in polys:
+            rings = []
+            for k, ring in enumerate(poly):
+                r = [[round(x, 2), round(y, 2)] for x, y in ring[::max(1, len(ring) // 300)]]
+                if r[0] != r[-1]:
+                    r.append(r[0])
+                if len(r) < 4:
+                    continue
+                area = sum(x0 * y1 - x1 * y0 for (x0, y0), (x1, y1) in zip(r, r[1:]))
+                if (k == 0 and area > 0) or (k > 0 and area < 0):     # d3 wants clockwise exteriors
+                    r = r[::-1]
+                rings.append(r)
+            if rings:
+                out.append(rings)
+        feats.append({"type": "Feature", "properties": {"id": i[1:], "lon": f["properties"].get("label_lon"),
+                                                         "lat": f["properties"].get("label_lat")},
+                      "geometry": {"type": "MultiPolygon", "coordinates": out}})
+    return feats
+
+
+def nearest_airport(lat, lon, airports, maxd=0.09):
+    """IATA code of the nearest airport within maxd degrees (None otherwise)."""
+    la, lo = airports.lat.values.astype(float), airports.lon.values.astype(float)
+    lat, lon = np.asarray(lat, float), np.asarray(lon, float)
+    out = np.full(len(lat), None, dtype=object)
+    for i in range(0, len(lat), 20000):
+        d = np.hypot(lat[i:i + 20000, None] - la, (lon[i:i + 20000, None] - lo) * np.cos(np.radians(la)))
+        j = d.argmin(1)
+        ok = d[np.arange(len(j)), j] < maxd
+        out[i:i + 20000][ok] = airports.code.values[j[ok]]
+    return out
+
+
 def to_pt(unix):
     """unix seconds -> naive Pacific datetimes (what the charts use)."""
     return pd.to_datetime(unix, unit="s", utc=True).dt.tz_convert(PT).dt.tz_localize(None)'''
@@ -371,7 +449,7 @@ def to_pt(unix):
 C["load"] = r'''# Default: the precomputed snapshot (public/bundle.npz) -> opens instantly, no download from adsb.lol.
 # "Fetch newest data" (or EMPTY_SKIES_EXPORT, used to rebuild the snapshot) downloads and processes the raw files.
 T0 = int(WINDOW_START.timestamp())
-_fresh = bool(refresh_btn.value) or bool(os.environ.get("EMPTY_SKIES_EXPORT"))
+_fresh = bool(os.environ.get("EMPTY_SKIES_EXPORT"))
 DATA_SOURCE, NOTICE, PRE = "snapshot", None, None
 
 if WASM:
@@ -386,9 +464,9 @@ else:
         _now = dt.datetime.now(dt.timezone.utc)
         _end = min(_now, WINDOW_START + dt.timedelta(hours=MAX_HOURS))
         _jobs = []
-        _t = WINDOW_START
+        _t = LOAD_START
         while _t < _end:
-            _jobs += [("event", _t), ("baseline", _t - dt.timedelta(seconds=BASELINE_SHIFT))]
+            _jobs += [(_p, _t - dt.timedelta(seconds=SHIFTS[_p])) for _p in ALL_PERIODS]
             _t += dt.timedelta(minutes=30)
 
         _frames, _calls, missing = [], [], []
@@ -420,7 +498,8 @@ else:
         _n = snap.groupby(["period", "minute"]).size()
         _bad = _n[_n < 0.6 * _n.rolling(9, center=True, min_periods=1).median()].index.get_level_values("minute")
         snap = snap[~snap.minute.isin(_bad)]
-        snap["t"] = snap.minute + np.where(snap.period == "baseline", BASELINE_SHIFT, 0)   # aligned clock (event day)
+        snap["t"] = snap.minute + snap.period.map(SHIFTS).astype(np.int64)   # aligned clock (event day)
+        snap["cs"] = snap.cs.astype("category")
 
         _cs = pd.concat(_calls).drop_duplicates("hex", keep="last")
         aircraft = (pd.DataFrame({"hex": snap.hex.unique()}).merge(_cs, on="hex", how="left")
@@ -437,16 +516,16 @@ else:
 if DATA_SOURCE == "live":
     PRE, MAP_STEP, DATA_BUILT = None, {"event": 1, "baseline": 1}, int(time.time())
     T_END = int(snap[snap.period == "event"].t.max())
+    AIRPORTS, AIRSPACE = load_airports(), load_airspace()
 else:
     missing, T_END, MAP_STEP, DATA_BUILT = _meta["missing"], _meta["T_END"], _meta["map_step"], _meta["built"]
+    AIRPORTS, AIRSPACE = PRE["airports"], _meta.get("airspace", [])
 
 _built = dt.datetime.fromtimestamp(DATA_BUILT, PT)
-_status = (f"<b>Live data</b> fetched from adsb.lol at {_built:%-I:%M %p} PT, through {fmt_pt(T_END)} PT."
-           if DATA_SOURCE == "live" else
-           f"Showing the <b>published snapshot</b>: built {_built:%b %-d, %-I:%M %p} PT, data through {fmt_pt(T_END)} PT."
-           + ("" if WASM else " The button downloads the newest data from adsb.lol and recomputes everything (a minute or two)."))
+_status = (f"Data: adsb.lol flight tracking, 10 a.m. Pacific on Nov. 13 to {fmt_pt(T_END)} "
+           f"{'on Nov. 14' if T_END >= T0 + 14 * 3600 else 'PT'} · snapshot built {_built:%b %-d, %-I:%M %p} PT")
 mo.vstack([
-    mo.Html(f'<div class="er-databar"><span>{_status}</span>{"" if WASM else refresh_btn}</div>'),
+    mo.Html(f'<div class="er-databar"><span>{_status}</span></div>'),
     mo.Html(f'<div class="er-databar-note">{mo.callout(mo.md(NOTICE), kind="warn").text}</div>') if NOTICE else mo.md(""),
 ])'''
 
@@ -467,18 +546,23 @@ C["events_fn"] = r'''def with_events(chart, lo=None, hi=None):
 C["derive"] = r'''# airborne aircraft per (aligned) minute over the US, by period and category; takeoffs/landings
 if PRE is None:
     _air = snap[(snap.alt_ft >= 0) & (snap.country == "US")]
-    counts = _air.groupby(["period", "category", "t"]).size().rename("n").reset_index()
-    moves_all = movements(snap)
-    moves_all["country"] = country_of(moves_all.lat.values, moves_all.lon.values, COUNTRY_GRID)
-    moves_all["region"] = region_of(moves_all.country.values, moves_all.lat.values, moves_all.lon.values)
-else:                                   # browser build: computed upstream from full 1-minute tracks
-    counts, moves_all = PRE["counts"], PRE["moves"]
-counts = counts[(counts.t >= T0) & (counts.t <= T_END)].copy()
+    counts_all = _air.groupby(["period", "category", "t"]).size().rename("n").reset_index()
+    moves_full = movements(snap)
+    moves_full["country"] = country_of(moves_full.lat.values, moves_full.lon.values, COUNTRY_GRID)
+    moves_full["region"] = region_of(moves_full.country.values, moves_full.lat.values, moves_full.lon.values)
+else:                                   # snapshot: computed upstream from full 1-minute tracks
+    counts_all, moves_full = PRE["counts"], PRE["moves"]
+_win = lambda d: d[(d.t >= T0) & (d.t <= T_END)].copy()
+week_counts = _win(counts_all[counts_all.period == "week"])
+counts = _win(counts_all[counts_all.period.isin(PERIODS)])
 counts["time_pt"] = to_pt(counts.t)
 total = counts.groupby(["period", "t", "time_pt"]).n.sum().reset_index()
 total["label"] = total.period.map(PERIOD_LABEL)
+week_total = week_counts.groupby("t").n.sum()
 
 # ignore the first and last 15 min, where tracks are cut by the window edges
+moves_all = moves_full[moves_full.period.isin(PERIODS)]
+week_moves = moves_full[(moves_full.period == "week") & (moves_full.t >= T0 + 900) & (moves_full.t <= T_END - 900)]
 moves = moves_all[(moves_all.t >= T0 + 900) & (moves_all.t <= T_END - 900)].copy()
 moves["bin"] = moves.t // 300 * 300
 moves["time_pt"] = to_pt(moves["bin"])'''
@@ -508,9 +592,10 @@ C["widget"] = r'''class FlightMap(anywidget.AnyWidget):
 
 
 def make_flightmap(period, cats):
-    s = snap[(snap.period == period) & snap.category.isin(cats) & (snap.t >= T0) & (snap.t <= T_END)]
+    _all = snap[(snap.period == period) & (snap.t >= T0) & (snap.t <= T_END)]
+    s = _all[_all.category.isin(cats)]
     by_min = {m: g for m, g in s.groupby("minute")}
-    mins = sorted(by_min)
+    mins = sorted(_all.minute.unique())          # slider range from all data, so an empty selection still shows the map
     shift = BASELINE_SHIFT if period == "baseline" else 0
     _n = s[(s.alt_ft >= 0) & (s.country == "US")].groupby("minute").size()
     step = 60 * MAP_STEP[period]
@@ -600,8 +685,9 @@ EXPORT_TO = os.environ.get("EMPTY_SKIES_EXPORT", "")
 if EXPORT_TO and not WASM:
     _p = Path(EXPORT_TO)
     _p.parent.mkdir(parents=True, exist_ok=True)
-    pack_bundle(_p, snap, aircraft, counts, moves_all,
-                {"T_END": T_END, "missing": missing, "built": int(time.time())})
+    pack_bundle(_p, snap, aircraft, counts_all, moves_full,
+                {"T_END": T_END, "missing": missing, "built": int(time.time())}, t0=T0,
+                airports=AIRPORTS, airspace=AIRSPACE)
     print(f"wrote {_p} ({_p.stat().st_size / 1e6:.1f} MB)")'''
 
 C["assets"] = "# Front end of the FlightMap widget (anywidget ESM + CSS), embedded so the notebook is a single file.\n" \

@@ -21,3 +21,6 @@
   padding: 5px 8px; font-size: 12px; white-space: nowrap; display: none; }
 .fm-hud .fm-event { font-weight: 600; margin-top: 2px; }
 .fm-hud .fm-event:empty { display: none; }
+.fm-legend .fm-glyphs { margin-top: 6px; padding-top: 6px; border-top: 1px solid rgba(255,255,255,.15); }
+.fm-legend .fm-glyphs div { display: flex; align-items: center; gap: 2px; }
+.fm-legend .fm-glyphs svg { display: inline-block; flex: none; }

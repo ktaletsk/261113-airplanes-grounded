@@ -3,7 +3,20 @@ const TILE = 256;
 const TILE_URL = (z, x, y) => `https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/${z}/${y}/${x}`;
 const STATES_URL = "https://cdn.jsdelivr.net/npm/us-atlas@3.0.1/states-10m.json";
 const TOPO_URL = "https://cdn.jsdelivr.net/npm/topojson-client@3.1.0/+esm";
-const PLANE = new Path2D("M0,-9 L1.4,-5 L1.4,-1.5 L8,2.5 L8,4 L1.4,2 L1,6 L3.5,8 L3.5,9 L0,8 L-3.5,9 L-3.5,8 L-1,6 L-1.4,2 L-8,4 L-8,2.5 L-1.4,-1.5 L-1.4,-5 Z");
+// one silhouette per category (index matches CATS: Airline, Business jet, General aviation, Helicopter, Other)
+const GLYPH_D = [
+  "M0,-9 L1.4,-5 L1.4,-1.5 L8,2.5 L8,4 L1.4,2 L1,6 L3.5,8 L3.5,9 L0,8 L-3.5,9 L-3.5,8 L-1,6 L-1.4,2 L-8,4 L-8,2.5 L-1.4,-1.5 L-1.4,-5 Z",
+  "M0,-8 L0.7,-5 L0.7,0 L5.5,3.5 L5.5,4.5 L0.7,2.6 L0.7,5 L3,6.6 L3,7.6 L0,7 L-3,7.6 L-3,6.6 L-0.7,5 L-0.7,2.6 L-5.5,4.5 L-5.5,3.5 L-0.7,0 L-0.7,-5 Z",
+  "M0,-7 L0.8,-6 L0.8,-3.2 L7.5,-2.8 L7.5,-1.2 L0.8,-0.9 L0.6,4 L3,5 L3,6.2 L0,5.7 L-3,6.2 L-3,5 L-0.6,4 L-0.8,-0.9 L-7.5,-1.2 L-7.5,-2.8 L-0.8,-3.2 L-0.8,-6 Z",
+  "M0,-3.2 C1.6,-3.2 2,-1.5 2,0 C2,1.6 1.2,2.6 0.5,2.8 L0.4,7 L1.8,7.3 L1.8,8 L-1.8,8 L-1.8,7.3 L-0.4,7 L-0.5,2.8 C-1.2,2.6 -2,1.6 -2,0 C-2,-1.5 -1.6,-3.2 0,-3.2 Z",
+  "M0,-4.5 L3.2,0 L0,4.5 L-3.2,0 Z",
+];
+const GLYPHS = GLYPH_D.map((d) => new Path2D(d));
+const GLYPH_SCALE = [1, 0.85, 0.8, 0.95, 0.9];
+const ROTOR = new Path2D("M0,0 m-6,0 a6,6 0 1,0 12,0 a6,6 0 1,0 -12,0");
+const glyphSvg = (k) => `<svg width="18" height="18" viewBox="-10 -10 20 20" style="vertical-align:-4px;margin-right:6px">` +
+  (k === 3 ? `<path d="M0,0 m-6,0 a6,6 0 1,0 12,0 a6,6 0 1,0 -12,0" fill="none" stroke="currentColor" stroke-width="1.2"/>` : "") +
+  `<path d="${GLYPH_D[k]}" fill="currentColor"/></svg>`;
 const fmtPT = new Intl.DateTimeFormat("en-US", { timeZone: "America/Los_Angeles", hour: "2-digit", minute: "2-digit", hour12: false });
 const fmtUTC = new Intl.DateTimeFormat("en-US", { timeZone: "UTC", hour: "2-digit", minute: "2-digit", hour12: false });
 const fmtDay = new Intl.DateTimeFormat("en-US", { timeZone: "America/Los_Angeles", weekday: "short", month: "short", day: "numeric" });
@@ -43,6 +56,7 @@ function render({ model, el }) {
         <div><span class="sw" style="background:rgb(255,216,74)"></span>~25,000 ft</div>
         <div><span class="sw" style="background:rgb(255,120,60)"></span>40,000 ft +</div>
         <div style="opacity:.75"><span class="sw" style="background:rgb(255,216,74);opacity:.35"></span>faded: Canada, Mexico</div>
+        <div class="fm-glyphs"></div>
         <div style="opacity:.6;margin-top:4px;font-size:10px">Basemap © Esri · states: US Census</div>
       </div>
       <canvas class="fm-spark"></canvas>
@@ -138,9 +152,13 @@ function render({ model, el }) {
         pts.push([x, y, i]);
         ctx.save(); ctx.translate(x, y); ctx.rotate((f.hdg[i] * Math.PI) / 180);
         const ground = f.alt[i] < 0;
-        ctx.scale(ground ? s * 0.6 : s, ground ? s * 0.6 : s);
+        const info = aircraft[f.hex[i]], k = info ? info[2] : 4;
+        const gs = (ground ? s * 0.6 : s) * GLYPH_SCALE[k];
+        ctx.scale(gs, gs);
         ctx.globalAlpha = f.us && !f.us[i] ? 0.35 : 1;
-        ctx.fillStyle = altColor(f.alt[i]); ctx.fill(PLANE);
+        const col = altColor(f.alt[i]);
+        if (k === 3) { ctx.strokeStyle = col; ctx.lineWidth = 1.1 / gs * s; ctx.stroke(ROTOR); }
+        ctx.fillStyle = col; ctx.fill(GLYPHS[k]);
         ctx.restore();
       }
     }
@@ -259,6 +277,11 @@ function render({ model, el }) {
     dirty = true;
   }, { passive: false });
 
+  const glyphLegend = () => {
+    $(".fm-glyphs").innerHTML = model.get("categories").map((c, k) => `<div>${glyphSvg(k)}${c}</div>`).join("");
+  };
+  model.on("change:categories", glyphLegend);
+  glyphLegend();
   setBounds(); hud();
   return () => { playing = false; };
 }

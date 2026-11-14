@@ -40,17 +40,30 @@ def _(mo):
       .er-prose a { color: inherit; text-decoration-thickness: 1px; text-underline-offset: 3px; }
       .er-hero { padding: 28px 0 8px; }
       .er-kicker { font: 700 12px Inter, sans-serif; letter-spacing: .16em; text-transform: uppercase; color: #e03131; }
+      .er-h1 { margin: 6px 0 14px; line-height: 0; }
+      .er-title { width: 100%; height: auto; display: block; overflow: visible; }
       .er-hero h1 { font-family: 'Source Serif 4', Georgia, serif; font-weight: 800; font-size: clamp(44px, 7vw, 76px);
                     line-height: 1.0; letter-spacing: -.02em; margin: 10px 0 14px; }
       .er-dek { font-family: 'Source Serif 4', Georgia, serif; font-size: 23px; line-height: 1.4; opacity: .85; margin: 0 0 18px; }
       .er-byline { font: 500 13px Inter, sans-serif; opacity: .6; border-top: 1px solid rgba(127,127,127,.3); padding-top: 12px; }
       .er-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 18px; padding: 14px 0 6px; }
       .er-stat .v { font: 700 34px/1.1 Inter, sans-serif; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
-      .er-stat .v.hot { color: #e03131; } .er-stat .v.warm { color: #f08c00; }
+      .er-stat .v.hot { color: #e03131; } .er-stat .v.warm { color: #f08c00; } .er-stat .v.good { color: #2f9e44; }
       .er-stat .l { font: 400 13.5px/1.35 Inter, sans-serif; opacity: .7; margin-top: 4px; }
         .er-note p, .er-note em { font-family: Inter, sans-serif !important; font-size: 12.5px !important; }
       .er-note { font: 400 12.5px/1.5 Inter, sans-serif; opacity: .6; max-width: 720px; margin: 4px auto 0; }
       .er-method { font: 400 14.5px/1.6 Inter, sans-serif; }
+      .er-part { max-width: 720px; margin: 64px auto 8px; padding-top: 22px; border-top: 3px solid currentColor; }
+      .er-part-n { font: 700 12px Inter, sans-serif; letter-spacing: .16em; text-transform: uppercase; color: #e03131; }
+      .er-part-t { font: 800 40px/1.1 'Source Serif 4', Georgia, serif; margin: 6px 0 6px; }
+      .er-part-d { font: 400 19px/1.4 'Source Serif 4', Georgia, serif; opacity: .7; }
+      .er-prose table { width: 100%; border-collapse: collapse; margin: 6px 0 22px; }
+      .er-prose th, .er-prose td { font: 400 14px/1.45 Inter, sans-serif !important; text-align: left !important; vertical-align: top;
+                                   padding: 8px 10px; border-bottom: 1px solid rgba(127,127,127,.25); }
+      .er-prose th { font-weight: 700 !important; opacity: .7; }
+      .er-prose td:first-child { white-space: nowrap; }
+      .er-prose td strong { font-family: Inter, sans-serif !important; font-size: 14px !important; }
+      .er-prose small, .er-prose small a { font: 400 12.5px/1.5 Inter, sans-serif !important; opacity: .75; }
       .er-databar { max-width: 720px; margin: 0 auto; display: flex; align-items: center; gap: 16px;
                     font: 400 13px/1.45 Inter, sans-serif; padding: 10px 14px; border-radius: 8px;
                     background: rgba(127,127,127,.10); }
@@ -115,12 +128,14 @@ def _(
 
 @app.cell(hide_code=True)
 async def _(
-    BASELINE_SHIFT,
+    ALL_PERIODS,
     BUNDLE_URL,
     Blocked,
+    LOAD_START,
     MAX_HOURS,
     NotPublished,
     PT,
+    SHIFTS,
     ThreadPoolExecutor,
     WASM,
     WINDOW_START,
@@ -132,6 +147,8 @@ async def _(
     country_of,
     dt,
     fmt_pt,
+    load_airports,
+    load_airspace,
     load_bundle,
     load_slot,
     load_type_db,
@@ -140,14 +157,13 @@ async def _(
     os,
     pd,
     read_bundle,
-    refresh_btn,
     region_of,
     time,
 ):
     # Default: the precomputed snapshot (public/bundle.npz) -> opens instantly, no download from adsb.lol.
     # "Fetch newest data" (or EMPTY_SKIES_EXPORT, used to rebuild the snapshot) downloads and processes the raw files.
     T0 = int(WINDOW_START.timestamp())
-    _fresh = bool(refresh_btn.value) or bool(os.environ.get("EMPTY_SKIES_EXPORT"))
+    _fresh = bool(os.environ.get("EMPTY_SKIES_EXPORT"))
     DATA_SOURCE, NOTICE, PRE = "snapshot", None, None
 
     if WASM:
@@ -162,9 +178,9 @@ async def _(
             _now = dt.datetime.now(dt.timezone.utc)
             _end = min(_now, WINDOW_START + dt.timedelta(hours=MAX_HOURS))
             _jobs = []
-            _t = WINDOW_START
+            _t = LOAD_START
             while _t < _end:
-                _jobs += [("event", _t), ("baseline", _t - dt.timedelta(seconds=BASELINE_SHIFT))]
+                _jobs += [(_p, _t - dt.timedelta(seconds=SHIFTS[_p])) for _p in ALL_PERIODS]
                 _t += dt.timedelta(minutes=30)
 
             _frames, _calls, missing = [], [], []
@@ -196,7 +212,8 @@ async def _(
             _n = snap.groupby(["period", "minute"]).size()
             _bad = _n[_n < 0.6 * _n.rolling(9, center=True, min_periods=1).median()].index.get_level_values("minute")
             snap = snap[~snap.minute.isin(_bad)]
-            snap["t"] = snap.minute + np.where(snap.period == "baseline", BASELINE_SHIFT, 0)   # aligned clock (event day)
+            snap["t"] = snap.minute + snap.period.map(SHIFTS).astype(np.int64)   # aligned clock (event day)
+            snap["cs"] = snap.cs.astype("category")
 
             _cs = pd.concat(_calls).drop_duplicates("hex", keep="last")
             aircraft = (pd.DataFrame({"hex": snap.hex.unique()}).merge(_cs, on="hex", how="left")
@@ -213,19 +230,30 @@ async def _(
     if DATA_SOURCE == "live":
         PRE, MAP_STEP, DATA_BUILT = None, {"event": 1, "baseline": 1}, int(time.time())
         T_END = int(snap[snap.period == "event"].t.max())
+        AIRPORTS, AIRSPACE = load_airports(), load_airspace()
     else:
         missing, T_END, MAP_STEP, DATA_BUILT = _meta["missing"], _meta["T_END"], _meta["map_step"], _meta["built"]
+        AIRPORTS, AIRSPACE = PRE["airports"], _meta.get("airspace", [])
 
     _built = dt.datetime.fromtimestamp(DATA_BUILT, PT)
-    _status = (f"<b>Live data</b> fetched from adsb.lol at {_built:%-I:%M %p} PT, through {fmt_pt(T_END)} PT."
-               if DATA_SOURCE == "live" else
-               f"Showing the <b>published snapshot</b>: built {_built:%b %-d, %-I:%M %p} PT, data through {fmt_pt(T_END)} PT."
-               + ("" if WASM else " The button downloads the newest data from adsb.lol and recomputes everything (a minute or two)."))
+    _status = (f"Data: adsb.lol flight tracking, 10 a.m. Pacific on Nov. 13 to {fmt_pt(T_END)} "
+               f"{'on Nov. 14' if T_END >= T0 + 14 * 3600 else 'PT'} · snapshot built {_built:%b %-d, %-I:%M %p} PT")
     mo.vstack([
-        mo.Html(f'<div class="er-databar"><span>{_status}</span>{"" if WASM else refresh_btn}</div>'),
+        mo.Html(f'<div class="er-databar"><span>{_status}</span></div>'),
         mo.Html(f'<div class="er-databar-note">{mo.callout(mo.md(NOTICE), kind="warn").text}</div>') if NOTICE else mo.md(""),
     ])
-    return COUNTRY_GRID, MAP_STEP, PRE, T0, T_END, aircraft, missing, snap
+    return (
+        AIRPORTS,
+        AIRSPACE,
+        COUNTRY_GRID,
+        MAP_STEP,
+        PRE,
+        T0,
+        T_END,
+        aircraft,
+        missing,
+        snap,
+    )
 
 
 @app.cell(hide_code=True)
@@ -257,23 +285,50 @@ def _(
 
 
 @app.cell(hide_code=True)
-def _(T0, TOT_BS, TOT_EV, alt, np, pd, rec_bs, rec_ev, to_pt, with_events):
+def _(
+    DAY3,
+    T0,
+    TOT_BS,
+    TOT_EV,
+    T_END,
+    alt,
+    pd,
+    rec_bs,
+    rec_ev,
+    to_pt,
+    week_moves,
+    week_total,
+    with_events,
+):
     _r30 = lambda s: s.rolling(30, min_periods=10).sum()
-    _dep = pd.DataFrame({"t": rec_ev.index, "pct": 100 * _r30(rec_ev).values / _r30(rec_bs).replace(0, np.nan).values,
-                         "series": "airline departures"})
-    _te = TOT_EV[TOT_EV.index >= T0]
-    _air = pd.DataFrame({"t": _te.index, "pct": 100 * _te.values / TOT_BS.reindex(_te.index).values,
-                         "series": "aircraft in the air"})
-    _d = pd.concat([_dep, _air]).dropna()
-    _d["time_pt"] = to_pt(_d.t)
-    recovery_chart = with_events(alt.Chart(_d).mark_line(strokeWidth=2.4).encode(
-        x=alt.X("time_pt:T", title=None, axis=alt.Axis(format="%-I:%M")),
-        y=alt.Y("pct:Q", title="% of the day before", scale=alt.Scale(domain=[0, 115])),
-        color=alt.Color("series:N", sort=["airline departures", "aircraft in the air"],
-                        scale=alt.Scale(range=["#1c7ed6", "#f08c00"])),
-        tooltip=["series:N", alt.Tooltip("time_pt:T", format="%-I:%M %p"), alt.Tooltip("pct:Q", format=".0f")])).properties(
-        width="container", height=260, title=alt.Title("The day in one chart",
-                                                       subtitle="U.S. airline departures (30-minute window) and aircraft in the air, as a share of the day before; Pacific time"))
+    _wk = week_moves[(week_moves.kind == "takeoff") & (week_moves.category == "Airline") & (week_moves.country == "US")]
+    rec_wk = _wk.groupby(_wk.t // 60 * 60).size().reindex(rec_ev.index, fill_value=0)
+    _order = [DAY3["event"], DAY3["baseline"], DAY3["week"]]
+    _dep = pd.concat([pd.DataFrame({"t": s.index, "n": _r30(s).values, "day": DAY3[p]})
+                      for p, s in [("event", rec_ev), ("baseline", rec_bs), ("week", rec_wk)]]).dropna()
+    _air = pd.concat([pd.DataFrame({"t": s.index, "n": s.values, "day": DAY3[p]})
+                      for p, s in [("event", TOT_EV), ("baseline", TOT_BS), ("week", week_total)]])
+    _air = _air[(_air.t >= T0) & (_air.t <= T_END)]
+    for _d in (_dep, _air):
+        _d["time_pt"] = to_pt(_d.t)
+    _dash = alt.StrokeDash("day:N", sort=_order, legend=None, scale=alt.Scale(domain=_order, range=[[1, 0], [5, 3], [1, 3]]))
+    _width = alt.StrokeWidth("day:N", sort=_order, legend=None, scale=alt.Scale(domain=_order, range=[2.6, 1.3, 1.3]))
+    _op = alt.Opacity("day:N", sort=_order, legend=None, scale=alt.Scale(domain=_order, range=[1, 0.55, 0.55]))
+    _x = alt.X("time_pt:T", title=None, axis=alt.Axis(format="%-I:%M"))
+    def _panel(d, main, ytitle, legend):
+        return with_events(alt.Chart(d).mark_line().encode(
+            x=_x, y=alt.Y("n:Q", title=ytitle),
+            color=alt.Color("day:N", sort=_order, title=None, legend=alt.Legend(orient="top") if legend else None,
+                            scale=alt.Scale(domain=_order, range=[main, "#9aa5b1", "#9aa5b1"])),
+            strokeDash=_dash, strokeWidth=_width, opacity=_op,
+            tooltip=["day:N", alt.Tooltip("time_pt:T", format="%-I:%M %p"), alt.Tooltip("n:Q", format=",.0f")])
+        ).properties(width=880, height=210)
+    recovery_chart = alt.vconcat(
+        _panel(_dep, "#1c7ed6", "airline departures / 30 min", True),
+        _panel(_air, "#f08c00", "aircraft in the air", False),
+    ).resolve_scale(color="independent").properties(title=alt.Title(
+        "The day in one chart",
+        subtitle="U.S. airline departures and aircraft in the air, Pacific time · bold: Nov. 13 · faint dashed: Nov. 12 · faint dotted: Nov. 6, a normal Friday"))
     recovery_chart
     return
 
@@ -281,9 +336,12 @@ def _(T0, TOT_BS, TOT_EV, alt, np, pd, rec_bs, rec_ev, to_pt, with_events):
 @app.cell(hide_code=True)
 def _(AIR_MIN, AIR_MIN_T, COLLAPSE_T, LIFTED, LIFT_T, fmt_pt, prose):
     prose(f'''
-    The two lines above tell the whole story. At {fmt_pt(COLLAPSE_T)} Pacific, U.S. airline departures (blue) fell
-    off a cliff. The number of aircraft in the air (orange) drained for hours as flights already aloft landed, bottoming
-    out at {AIR_MIN:,} at {fmt_pt(AIR_MIN_T)}{f" After the FAA lifted the stop at {fmt_pt(LIFT_T)}, both began to climb." if LIFTED else ""}
+    The bold lines are Nov. 13; the faint lines show the same hours on Nov. 12 (dashed) and on Nov. 6, a normal Friday
+    (dotted). Departures always thin out late in the evening, so compare the bold line with the faint ones, not with its
+    own afternoon.
+
+    At {fmt_pt(COLLAPSE_T)} Pacific, departures fell off a cliff. The number of aircraft in the air drained for hours as
+    flights already aloft landed, bottoming out at {AIR_MIN:,} at {fmt_pt(AIR_MIN_T)}{f". After the FAA lifted the stop at {fmt_pt(LIFT_T)}, departures surged, briefly overshot and then settled well below normal; Part 3 explains why." if LIFTED else "."}
 
     This page tells it in three parts: how the sky emptied, what kept flying when it was nearly empty, and how it came back.
     ''')
@@ -386,16 +444,119 @@ def _(
 
 
 @app.cell(hide_code=True)
-def _(ZONE_COLLAPSE, fmt_pt, prose):
-    _z = {k: (fmt_pt(v) if v else "—") for k, v in ZONE_COLLAPSE.items()}
-    prose(f"""
-    ## Everywhere at once
+def _(
+    APT_Q,
+    APT_STOP,
+    CNN_ORIGIN,
+    COLLAPSE_T,
+    FIRST_APT,
+    GROUND_STOP_T,
+    MDW_STOP,
+    ORD_MISSED,
+    ORD_STOP,
+    T0,
+    ZoneInfo,
+    dt,
+    fmt_pt,
+    prose,
+):
+    _f, _q = FIRST_APT, APT_Q
+    _ord = (f"At O'Hare, departures stopped at **{fmt_pt(ORD_STOP)} Pacific** ({dt.datetime.fromtimestamp(ORD_STOP, ZoneInfo('America/Chicago')):%-I:%M} in Chicago), "
+            f"{round(((COLLAPSE_T or T0) - ORD_STOP) / 60)} minutes before the nationwide collapse and "
+            f"{round((GROUND_STOP_T - ORD_STOP) / 60)} minutes before the FAA's order. By the time departures stopped everywhere, "
+            f"O'Hare would normally have sent off about {ORD_MISSED} more airline flights. It sent none. ") if ORD_STOP else ""
+    _mdw = (f"Midway itself is too small to time precisely: its last departure was at {fmt_pt(MDW_STOP)}, a few minutes "
+            f"ahead of most airports. ") if MDW_STOP else ""
+    prose(f'''
+    ## Where it started
 
-    The halt did not roll across the country as a wave. Splitting departures into rough time-zone bands, the same
-    test finds the collapse at **{_z["East"]}** in the East, **{_z["Central"]}** in the Central band, **{_z["Mountain"]}**
-    in the Mountain band and **{_z["West"]}** in the West (all Pacific time), within a few minutes of each other.
-    At the biggest hubs, the half hour after the cliff looked like an airport closed for the night.
-    """)
+    Airline sources told CNN that the failure began with network routers at Chicago's Midway airport and spread
+    nationwide ([CNN]({CNN_ORIGIN})). The tracking data points to Chicago too. {_ord}{_mdw}It was not one airline
+    pausing: United, American, their regional partners and foreign carriers all stopped at O'Hare at once, while
+    Southwest, United, American and Delta kept departing elsewhere at normal rates until about 12:35. That pattern
+    fits a problem in Chicago's air traffic control.
+
+    Then it reached everyone else within minutes. Half of the {len(APT_STOP)} busiest airports sent off their last
+    departure between {fmt_pt(_q[0])} and {fmt_pt(_q[2])}. The map below shows when each one went quiet.
+    ''') if _f else prose("## Where it started\\n\\nNot enough data.")
+    return
+
+
+@app.cell(hide_code=True)
+def _(APT_STOP, alt, fmt_pt, np):
+    _states = alt.topo_feature("https://cdn.jsdelivr.net/npm/us-atlas@3.0.1/states-10m.json", "states")
+    _d = APT_STOP.copy()
+    _d["when"] = _d.stop.map(fmt_pt)
+    _d["label"] = np.where(_d.index < 3, _d.apt + " " + _d.when, np.where(_d.apt.isin(["MDW"]), _d.apt + " " + _d.when, ""))
+    _base = alt.Chart(_states).mark_geoshape(fill="#2b2f33", stroke="#555b61", strokeWidth=0.6)
+    _pts = alt.Chart(_d).mark_circle(stroke="#111", strokeWidth=0.6, opacity=0.95).encode(
+        longitude="lon:Q", latitude="lat:Q",
+        size=alt.Size("per_hr:Q", title="normal departures / hour", scale=alt.Scale(range=[40, 900]), legend=None),
+        color=alt.Color("vs_collapse:Q", title="minutes vs. 12:38 p.m.",
+                        scale=alt.Scale(scheme="inferno", domain=[-25, 5], clamp=True), legend=alt.Legend(orient="bottom-left")),
+        tooltip=["apt:N", alt.Tooltip("when:N", title="last departure (PT)"), alt.Tooltip("per_hr:Q", title="normal deps/hr", format=".0f"),
+                 alt.Tooltip("missed:Q", title="normally in next 25 min")])
+    _lab = alt.layer(*[alt.Chart(_d[(_d.label != "") & m]).mark_text(
+        align="left", dx=16, dy=dy, fontSize=12, fontWeight="bold", color="#ffd84a").encode(longitude="lon:Q", latitude="lat:Q", text="label:N")
+        for m, dy in [(_d.apt != "MDW", -10), (_d.apt == "MDW", 12)]])
+    origin_map = alt.layer(_base, _pts, _lab).project(type="albersUsa").properties(
+        width="container", height=430, title=alt.Title("Chicago went quiet first",
+        subtitle="Last airline departure before each busy airport fell silent, Pacific time; darker = earlier, size = normal traffic"))
+    origin_map
+    return
+
+
+@app.cell(hide_code=True)
+def _(
+    APT_STOP,
+    APT_TK,
+    COLLAPSE_T,
+    GRID_APTS,
+    PERIODS,
+    PERIOD_LABEL,
+    T0,
+    alt,
+    fmt_pt,
+    pd,
+    to_pt,
+):
+    _lo = ((COLLAPSE_T or T0) - 3000) // 300 * 300
+    _hi = _lo + 4800
+    _d = APT_TK[APT_TK.apt.isin(GRID_APTS) & (APT_TK.t >= _lo) & (APT_TK.t < _hi)]
+    _d = (_d.assign(b=_d.t // 300 * 300).groupby(["apt", "period", "b"]).size()
+          .reindex(pd.MultiIndex.from_product([GRID_APTS, PERIODS, range(_lo, _hi, 300)], names=["apt", "period", "b"]), fill_value=0)
+          .rename("n").reset_index())
+    _d["time_pt"] = to_pt(_d.b + 150)
+    _d["day"] = _d.period.map(PERIOD_LABEL)
+    _panels = []
+    for _a in GRID_APTS:
+        _s = int(APT_STOP.set_index("apt").stop[_a])
+        _p = alt.Chart(_d[_d.apt == _a]).mark_line(strokeWidth=2, interpolate="step-after").encode(
+            x=alt.X("time_pt:T", title=None, axis=alt.Axis(format="%-I:%M", tickCount=3, labelFontSize=9)),
+            y=alt.Y("n:Q", title=None, axis=alt.Axis(tickCount=3, labelFontSize=9)),
+            color=alt.Color("day:N", sort=list(PERIOD_LABEL.values()), legend=None, scale=alt.Scale(range=["#1c7ed6", "#adb5bd"])),
+            strokeDash=alt.StrokeDash("day:N", sort=list(PERIOD_LABEL.values()), legend=None, scale=alt.Scale(range=[[1, 0], [4, 3]])))
+        _r = alt.Chart(pd.DataFrame({"t": [to_pt(pd.Series([_s])).iloc[0]]})).mark_rule(color="#f08c00", strokeDash=[3, 2]).encode(x="t:T")
+        _panels.append(alt.layer(_p, _r).properties(width=150, height=80, title=alt.Title(
+            f"{_a} · {fmt_pt(_s)}", fontSize=12, color="#ffd84a" if _a in ("ORD", "MDW") else None)))
+    origin_grid = alt.concat(*_panels, columns=4).properties(title=alt.Title(
+        "Airport by airport", subtitle="Airline departures per 5 minutes, ordered by when each went quiet (orange line); solid = Nov. 13, dashed = Nov. 12"))
+    origin_grid
+    return
+
+
+@app.cell(hide_code=True)
+def _(ZONE_COLLAPSE, fmt_pt, prose):
+    prose(f'''
+    ## Then everywhere at once
+
+    Outside Chicago, there was little sign of a wave rolling across the country. Splitting departures into rough
+    time-zone bands finds the collapse at **{({k: fmt_pt(v) for k, v in ZONE_COLLAPSE.items()}).get("East", "—")}** in the East,
+    **{({k: fmt_pt(v) for k, v in ZONE_COLLAPSE.items()}).get("Central", "—")}** in the Central band,
+    **{({k: fmt_pt(v) for k, v in ZONE_COLLAPSE.items()}).get("Mountain", "—")}** in the Mountain band and
+    **{({k: fmt_pt(v) for k, v in ZONE_COLLAPSE.items()}).get("West", "—")}** in the West (all Pacific time). At the biggest
+    hubs, the half hour after the cliff looked like an airport closed for the night.
+    ''')
     return
 
 
@@ -661,6 +822,19 @@ def _(CATS, alt, counts, with_events):
 
 
 @app.cell(hide_code=True)
+def _(BJ_HIGH, BJ_TK, GA_HIGH, OSINT_POST, prose):
+    prose(f'''
+    Below 18,000 feet, pilots can fly under visual flight rules without clearances from the en-route centers that were
+    failing, a point also made in a [parallel analysis of the same data]({OSINT_POST}). Business jets show it. Only
+    **{BJ_TK["event"]}** took off from lower-48 airports during the stop, against {BJ_TK["baseline"]} in the same hours a
+    day earlier, and those that flew stayed lower: {BJ_HIGH["event"]}% of their positions were above 18,000 feet, against
+    {BJ_HIGH["baseline"]}% normally. Small propeller planes, which rarely climb that high anyway
+    ({GA_HIGH["event"]}% vs. {GA_HIGH["baseline"]}%), carried on much as usual.
+    ''')
+    return
+
+
+@app.cell(hide_code=True)
 def _(COLLAPSE_T, NYT_AK, REGION_STATS, fmt_pt, prose):
     _r = REGION_STATS
     prose(f'''
@@ -740,7 +914,9 @@ def _(
 
     The halt was not total. Some international flights were departing U.S. airports, including Honolulu and San
     Francisco for Asia, and several left Kennedy for Europe, [The New York Times reported]({NYT_INTL}). The FAA had not
-    said which international flights were cleared to go.
+    said which international flights were cleared to go. Wikipedia's account of the day says Pacific-bound flights from
+    San Francisco were cleared about two hours after the advisory, and some transatlantic flights from the East Coast
+    were allowed to leave.
 
     The data shows them clearly in the wide-body jets that fly long international routes. In the hour after the collapse,
     just **{_wb(LH_FIRST_HOUR[0])}** left mainland airports, against {LH_FIRST_HOUR[1]} the day before. Then they started
@@ -778,6 +954,80 @@ def _(
         width="container", height=240, title=alt.Title("Wide-bodies dipped, then the long-haul bank left",
                                                        subtitle="Wide-body airline departures from the lower 48 per 30 minutes; solid = Nov. 13, dashed = Nov. 12"))
     intl_chart
+    return
+
+
+@app.cell(hide_code=True)
+def _(CNN_ORIGIN, GATEWAYS, GW_PCT, TRICKLE, prose):
+    _g = GATEWAYS.set_index("apt")
+    _none = [a for a in GATEWAYS[GATEWAYS.kind == "inland hub"].apt if _g.loc[a, "nov13"] == 0][:4]
+    _top = GATEWAYS[GATEWAYS.kind == "coastal gateway"].sort_values("nov13", ascending=False).head(3)
+    prose(f'''
+    Where the flights left from mattered. A long-haul flight from a coastal gateway reaches oceanic airspace within
+    minutes. Oceanic airspace is managed through a separate, largely text-based system, as the head of the air traffic
+    controllers' union explained on [CNN]({CNN_ORIGIN}). A flight from an inland hub first has to cross the en-route
+    centers that were failing. During the stop, coastal gateways sent off **{GW_PCT.get("coastal gateway", 0)}%** of
+    their usual wide-body departures
+    ({", ".join(f"{a} {int(_g.loc[a, 'nov13'])} vs. {int(_g.loc[a, 'nov12'])}" for a in _top.apt)}), and inland hubs
+    **{GW_PCT.get("inland hub", 0)}%**{f"; {', '.join(_none)} sent none" if _none else ""}.
+
+    Those long-haul flights, plus flights within Alaska and Hawaii, kept the departure line in the chart at the top
+    of the page off zero: of the {TRICKLE["n"]:,} airline departures from U.S. airports during the stop,
+    {TRICKLE["akhi"]}% were in Alaska or Hawaii and {TRICKLE["wide48"]}% were wide-bodies from the lower 48.
+    ''')
+    return
+
+
+@app.cell(hide_code=True)
+def _(GATEWAYS, alt):
+    _d = GATEWAYS.head(16).melt(id_vars=["apt", "kind"], value_vars=["nov13", "nov12"], var_name="day", value_name="n")
+    _d["day"] = _d.day.map({"nov13": "Nov. 13, during the stop", "nov12": "Nov. 12, same hours"})
+    _order = GATEWAYS.head(16).sort_values(["kind", "nov12"], ascending=[True, False]).apt.tolist()
+    gateway_chart = alt.Chart(_d).mark_bar().encode(
+        y=alt.Y("apt:N", sort=_order, title=None),
+        x=alt.X("n:Q", title="wide-body departures"),
+        yOffset=alt.YOffset("day:N", sort=["Nov. 13, during the stop", "Nov. 12, same hours"]),
+        color=alt.Color("kind:N", title=None, scale=alt.Scale(domain=["coastal gateway", "inland hub"], range=["#1c7ed6", "#e8590c"]),
+                        legend=alt.Legend(orient="top")),
+        opacity=alt.Opacity("day:N", sort=["Nov. 13, during the stop", "Nov. 12, same hours"], scale=alt.Scale(range=[1, 0.3]),
+                            legend=alt.Legend(orient="top", title=None)),
+        tooltip=["apt:N", "kind:N", "day:N", "n:Q"]).properties(width="container", height=alt.Step(11), title=alt.Title(
+        "Coastal gateways kept sending long-haul flights; inland hubs mostly didn't",
+        subtitle="Wide-body airline departures between the collapse and the lift, vs. the same hours on Nov. 12"))
+    gateway_chart
+    return
+
+
+@app.cell(hide_code=True)
+def _(AIRSPACE, ROUTES, alt, pd):
+    _feats = alt.Data(values=AIRSPACE)
+    _states = alt.topo_feature("https://cdn.jsdelivr.net/npm/us-atlas@3.0.1/states-10m.json", "states")
+    _bbox = {"type": "FeatureCollection", "features": [{"type": "Feature", "properties": {}, "geometry": {
+        "type": "Polygon", "coordinates": [[[-135, 18], [-135, 55], [-55, 55], [-55, 18], [-135, 18]][::-1]]}}]}
+    _proj = dict(type="mercator", center=[-100, 44], scale=620)
+    _centers = alt.Chart(_feats).mark_geoshape(fill="#e8590c", fillOpacity=0.10, stroke="#e8590c", strokeOpacity=0.55, strokeWidth=0.8)
+    _st = alt.Chart(_states).mark_geoshape(fill=None, stroke="#6c757d", strokeWidth=0.4)
+    _lab = alt.Chart(alt.Data(values=[{"id": f["properties"]["id"], "lon": f["properties"]["lon"], "lat": f["properties"]["lat"]}
+                                      for f in AIRSPACE if f["properties"].get("lon")])).mark_text(
+        color="#e8590c", fontSize=9, opacity=0.8).encode(longitude="lon:Q", latitude="lat:Q", text="id:N")
+    _rows = [{"route": f'{r["cs"]} from {r["apt"]}', "kind": r["kind"], "i": i, "lon": p[0], "lat": p[1]}
+             for r in ROUTES for i, p in enumerate(r["path"])]
+    _paths = alt.Chart(pd.DataFrame(_rows)).mark_line(strokeWidth=2.2).encode(
+        longitude="lon:Q", latitude="lat:Q", detail="route:N", order="i:Q",
+        color=alt.Color("kind:N", title=None, legend=alt.Legend(orient="bottom"),
+                        scale=alt.Scale(domain=["left during the stop (coastal)", "same hour on Nov. 12 (inland, held on Nov. 13)"],
+                                        range=["#4dabf7", "#ff6b6b"])),
+        strokeDash=alt.StrokeDash("kind:N", legend=None, scale=alt.Scale(
+            domain=["left during the stop (coastal)", "same hour on Nov. 12 (inland, held on Nov. 13)"], range=[[1, 0], [5, 3]])),
+        tooltip=["route:N", "kind:N"]) if _rows else alt.Chart(pd.DataFrame({"lon": [], "lat": []})).mark_line()
+    _ends = pd.DataFrame([{"route": f'{r["cs"]} from {r["apt"]}', "lon": r["path"][0][0], "lat": r["path"][0][1], "apt": r["apt"]} for r in ROUTES])
+    _dots = alt.Chart(_ends).mark_text(fontSize=11, fontWeight="bold", color="#f1f3f5", dy=-9).encode(
+        longitude="lon:Q", latitude="lat:Q", text="apt:N") if len(_ends) else alt.Chart(pd.DataFrame({"lon": []})).mark_point()
+    airspace_map = alt.layer(_centers, _st, _lab, _paths, _dots).project(**_proj).properties(
+        width="container", height=440, title=alt.Title(
+            "Inland long-haul flights must cross the failing en-route centers first",
+            subtitle="Shaded: the 20 lower-48 air route traffic control centers. Example wide-body routes, first 4 hours after takeoff"))
+    airspace_map
     return
 
 
@@ -830,6 +1080,63 @@ def _(EVENTS, NB_END, PERIOD_LABEL, T0, alt, nb_tk, np, pd, to_pt):
         "Canada and Mexico: U.S.-bound departures stopped, the rest kept going",
         subtitle="Airline departures per 30 minutes; solid = Nov. 13, dashed = Nov. 12"))
     neighbors_chart
+    return
+
+
+@app.cell(hide_code=True)
+def _(AUS_TARMAC, CNN_ORIGIN, TARMAC, prose):
+    _top = TARMAC.head(3)
+    _aus = AUS_TARMAC
+    prose(f'''
+    ## Where the planes piled up
+
+    With nothing taking off and flights still landing, airports filled up. Airlines warned that some were running out of
+    gates and taxiway space, and one airline source told CNN that Austin might be the first to saturate
+    ([CNN]({CNN_ORIGIN})). Counting aircraft on the ground with their transponders on (mostly planes taxiing or waiting,
+    since parked planes often switch theirs off) shows modest build-ups rather than dramatic ones. The largest were at
+    {", ".join(f"**{r.apt}** ({r.ratio:.1f} times its morning level)" for r in _top.itertuples())}.
+    {f"Austin was at {_aus['ratio']:.1f} times its morning level, so it does not stand out in this data." if _aus else ""}
+    This measure is noisy: it depends on which receivers can hear aircraft on the ground at each airport.
+    ''') if len(TARMAC) else prose("## Where the planes piled up\\n\\nNot enough data.")
+    return
+
+
+@app.cell(hide_code=True)
+def _(
+    GROUND,
+    PERIODS,
+    PERIOD_LABEL,
+    T0,
+    TARMAC,
+    T_END,
+    alt,
+    fmt_pt,
+    pd,
+    to_pt,
+    with_events,
+):
+    _d = TARMAC.head(12).copy()
+    _d["when"] = _d.peak_t.map(fmt_pt)
+    _bars = alt.Chart(_d).mark_bar(color="#e8590c").encode(
+        y=alt.Y("apt:N", sort="-x", title=None), x=alt.X("ratio:Q", title="× the airport's own morning level"),
+        tooltip=["apt:N", alt.Tooltip("peak:Q", title="peak on ground"), alt.Tooltip("when:N", title="at (PT)"),
+                 alt.Tooltip("normal:Q", title="normal", format=".0f"), alt.Tooltip("ratio:Q", format=".1f")])
+    _txt = _bars.mark_text(align="left", dx=4, color="#adb5bd", fontSize=11).encode(text=alt.Text("peak:Q"))
+    _left = alt.layer(_bars, _txt).properties(width=300, height=alt.Step(18), title=alt.Title(
+        "Where the planes piled up", subtitle="Aircraft on the ground (transponder on), average during the stop vs. the same morning; label = peak"))
+    _a = TARMAC.apt.iloc[0] if len(TARMAC) else "ORD"
+    _s = pd.concat([GROUND.loc[(p, _a)].rename("n").to_frame().assign(day=PERIOD_LABEL[p]) for p in PERIODS
+                    if (p, _a) in GROUND.index]).rename_axis("t").reset_index()
+    _s = _s[(_s.t >= T0) & (_s.t <= T_END)]
+    _s["time_pt"] = to_pt(_s.t)
+    _right = with_events(alt.Chart(_s).mark_line(strokeWidth=2).encode(
+        x=alt.X("time_pt:T", title=None, axis=alt.Axis(format="%-I:%M")), y=alt.Y("n:Q", title="aircraft on the ground"),
+        color=alt.Color("day:N", sort=list(PERIOD_LABEL.values()), legend=None, scale=alt.Scale(range=["#e8590c", "#adb5bd"])),
+        strokeDash=alt.StrokeDash("day:N", sort=list(PERIOD_LABEL.values()), legend=None, scale=alt.Scale(range=[[1, 0], [4, 3]])),
+        tooltip=["day:N", alt.Tooltip("time_pt:T", format="%-I:%M %p"), "n:Q"])).properties(width=400, height=260, title=alt.Title(
+        f"{_a}: aircraft on the ground", subtitle="solid = Nov. 13, dashed = Nov. 12 (transponder on)"))
+    tarmac_chart = alt.hconcat(_left, _right)
+    tarmac_chart
     return
 
 
@@ -936,6 +1243,166 @@ def _(
 
 
 @app.cell(hide_code=True)
+def _(BACKLOG_PCT, EVE_ONSCHED_PCT, LIFT_T, PEAK_T, T_END, fmt_pt, prose):
+    prose(f'''
+    ## Why departures overshot, then settled
+
+    After the restart, departures climbed quickly, peaked around {fmt_pt(PEAK_T) if PEAK_T else "–"} and then fell back.
+    Matching flight numbers against a normal Friday, Nov. 6, explains the shape. About **{BACKLOG_PCT}%** of the airline
+    departures after the lift were flights that normally leave during the afternoon: the held backlog, released in a
+    wave. Underneath it, the regular evening schedule was thin. Only about **{EVE_ONSCHED_PCT}%** of the flights that
+    normally leave between {fmt_pt(LIFT_T)} and {fmt_pt(T_END - 1800)} left within an hour of their usual time. As the
+    backlog drained, departures settled at that lower level.
+    ''')
+    return
+
+
+@app.cell(hide_code=True)
+def _(BACKLOG, BACKLOG_KINDS, alt, to_pt, week_moves, with_events):
+    _b = BACKLOG.assign(b=BACKLOG.t // 900 * 900).groupby(["b", "kind"]).size().rename("n").reset_index()
+    _b["time_pt"] = to_pt(_b.b + 450)
+    _wkq = _wk15 = week_moves[(week_moves.kind == "takeoff") & (week_moves.category == "Airline") & (week_moves.country == "US")
+                             & (week_moves.t >= BACKLOG.t.min() if len(BACKLOG) else True)]
+    _wkq = _wkq.groupby(_wkq.t // 900 * 900).size().rename("n").reset_index().rename(columns={"t": "b"})
+    _wkq["time_pt"] = to_pt(_wkq.b + 450)
+    _wkq = _wkq[_wkq.b <= _b.b.max()] if len(_b) else _wkq
+    _area = alt.Chart(_b).mark_area(opacity=0.9, interpolate="monotone").encode(
+        x=alt.X("time_pt:T", title=None, axis=alt.Axis(format="%-I:%M")),
+        y=alt.Y("n:Q", stack="zero", title="airline departures / 15 min"),
+        color=alt.Color("kind:N", title=None, sort=BACKLOG_KINDS, legend=alt.Legend(orient="top"),
+                        scale=alt.Scale(domain=BACKLOG_KINDS, range=["#e8590c", "#fab005", "#1c7ed6", "#868e96"])),
+        order=alt.Order("kind_order:Q"),
+        tooltip=["kind:N", alt.Tooltip("time_pt:T", format="%-I:%M %p"), "n:Q"]).transform_calculate(
+        kind_order=f"indexof({BACKLOG_KINDS}, datum.kind)")
+    _ref = alt.Chart(_wkq).mark_line(strokeDash=[1, 3], color="#9aa5b1", strokeWidth=1.6).encode(
+        x="time_pt:T", y="n:Q", tooltip=[alt.Tooltip("n:Q", title="Nov. 6 departures")])
+    backlog_chart = with_events(alt.layer(_area, _ref), lo=int(BACKLOG.t.min()) if len(BACKLOG) else None).properties(
+        width="container", height=260, title=alt.Title(
+            "The backlog left in a wave on top of a thin evening schedule",
+            subtitle="Airline departures after the lift, by how each flight number compares with Nov. 6 (estimated) · dotted: all departures on Nov. 6"))
+    backlog_chart
+    return
+
+
+@app.cell(hide_code=True)
+def _(
+    EST_MISSING,
+    EVE_SEEN_PCT,
+    FLOOR,
+    NYT_LIVE,
+    STOP_DELAY_H,
+    STOP_FLEW,
+    STOP_MISSING,
+    STOP_N,
+    T_END,
+    fmt_pt,
+    prose,
+):
+    _f = FLOOR
+    prose(f'''
+    ## What happened to the afternoon's flights
+
+    The flight-tracking data has no airline schedules, so this section uses a normal Friday as a stand-in: a flight
+    number that left at 2:10 p.m. on Nov. 6 is treated as scheduled for about 2:10 p.m. on Nov. 13, and then looked for
+    on Nov. 13. It is an estimate. Schedules change from week to week, and some flights are missing from the data. On
+    the normal morning of Nov. 13, before the stop, {_f["on time (±15 min)"]:.0f}% of flight numbers left within 15
+    minutes of their Nov. 6 time and {_f["not seen departing"]:.0f}% were not seen at all. That is the noise floor for
+    the numbers below.
+
+    Of the **{STOP_N:,}** flights "scheduled" to leave lower-48 airports during the stop, **{STOP_FLEW:,}** left later, a median
+    **{STOP_DELAY_H:.1f} hours** late. **{STOP_MISSING:,}** had not been seen departing by {fmt_pt(T_END)} Pacific.
+    Allowing for the normal-morning noise floor, that suggests roughly **{EST_MISSING:,}** of them were cancelled or
+    still waiting. For the whole day, Cirium counted more than 8,200 cancelled flights, over 31% of Friday's U.S.
+    schedule ([The New York Times]({NYT_LIVE})). For the evening after the lift, only {EVE_SEEN_PCT}% of scheduled flight numbers had been seen
+    departing by {fmt_pt(T_END)} Pacific.
+    ''') if STOP_DELAY_H is not None else prose("## What happened to the afternoon's flights\\n\\nNot enough data yet.")
+    return
+
+
+@app.cell(hide_code=True)
+def _(MATCH, STATUSES, T0, T_END, alt, pd, to_pt, with_events):
+    _m = MATCH[(MATCH.sched_t >= T0 + 900) & (MATCH.sched_t <= T_END - 1800)]
+    _s = (_m.assign(b=_m.sched_t // 1800 * 1800).groupby(["b", "status"]).size()
+          .unstack(fill_value=0).reindex(columns=STATUSES, fill_value=0))
+    _sh = _s.div(_s.sum(axis=1), axis=0) * 100
+    _top = _sh.cumsum(axis=1)
+    _rows = []
+    for _b in _sh.index:
+        for _st in STATUSES:
+            _rows.append({"b": _b, "status": _st, "y0": _top.loc[_b, _st] - _sh.loc[_b, _st], "y1": _top.loc[_b, _st],
+                          "share": _sh.loc[_b, _st], "n": int(_s.loc[_b, _st])})
+    _r = pd.DataFrame(_rows)
+    _r["x0"], _r["x1"] = to_pt(_r.b + 90), to_pt(_r.b + 1710)
+    sched_chart = with_events(alt.Chart(_r).mark_rect().encode(
+        x=alt.X("x0:T", title="scheduled departure (Nov. 6 time, Pacific)", axis=alt.Axis(format="%-I:%M")), x2="x1:T",
+        y=alt.Y("y0:Q", title="% of scheduled flights", scale=alt.Scale(domain=[0, 100])), y2="y1:Q",
+        color=alt.Color("status:N", title=None, sort=STATUSES, legend=alt.Legend(orient="top"),
+                        scale=alt.Scale(domain=STATUSES, range=["#2f9e44", "#fab005", "#e8590c", "#868e96"])),
+        tooltip=["status:N", alt.Tooltip("x0:T", format="%-I:%M %p", title="scheduled from"), "n:Q",
+                 alt.Tooltip("share:Q", format=".0f", title="%")])).properties(width="container", height=240, title=alt.Title(
+        "What happened to each scheduled departure (estimated)",
+        subtitle="Airline flight numbers that left lower-48 airports at this time on Nov. 6, and what the same flight number did on Nov. 13"))
+    sched_chart
+    return
+
+
+@app.cell(hide_code=True)
+def _(COLLAPSE_T, LIFT_T, MATCH, T0, T_END, alt):
+    _d = MATCH[(MATCH.sched_t >= (COLLAPSE_T or T0)) & (MATCH.sched_t < min(LIFT_T, T_END)) & (MATCH.actual_t >= (COLLAPSE_T or T0))]
+    _d = _d.assign(h=(_d.delay_min / 60).clip(lower=0, upper=8.99))
+    delay_chart = alt.Chart(_d).mark_bar(color="#e8590c").encode(
+        x=alt.X("h:Q", bin=alt.Bin(step=0.5, extent=[0, 9]), title="hours late (8+ grouped)"),
+        y=alt.Y("count():Q", title="flights"),
+        tooltip=[alt.Tooltip("count():Q", title="flights")]).properties(width="container", height=200, title=alt.Title(
+        "How late the afternoon's flights left",
+        subtitle="Lower-48 flights normally departing during the stop that left after the collapse (estimated from Nov. 6 flight numbers)"))
+    delay_chart
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.Html('<div class="er-part"><div class="er-part-n">In context</div>'
+            '<div class="er-part-t">How rare is this?</div>'
+            '<div class="er-part-d">Nationwide ground stops, from 9/11 to today</div></div>')
+    return
+
+
+@app.cell(hide_code=True)
+def _(prose):
+    prose('''
+    Nationwide ground stops are rare. By [Wikipedia's count](https://en.wikipedia.org/wiki/2026_US_ground_stop),
+    Nov. 13 was only the third in U.S. history; some outlets counted it as the second since 9/11.
+
+    | Date | What happened | What stopped | How long |
+    |---|---|---|---|
+    | Sept. 11, 2001 | Terrorist hijackings | All civil traffic: departures halted, and every aircraft in the air ordered to land | About two days; commercial flights resumed Sept. 13 |
+    | Jan. 11, 2023 | Failure of the NOTAM system that publishes safety notices to pilots, after a contractor deleted files | Domestic departures | About 1.5 hours, until 9 a.m. Eastern |
+    | **Nov. 13, 2026** | **Communications failure affecting the FAA's en-route control centers** | **Departures, with exceptions for Alaska, Hawaii and some international flights** | **About 4 hours 20 minutes, 3:54 to 8:15 p.m. Eastern** |
+
+    The first was different in kind. After the hijackings on Sept. 11, 2001, controllers brought down every aircraft in
+    the sky: 4,638 commercial and private planes were landed and accounted for within about three hours. The second, on
+    Jan. 11, 2023, halted domestic departures for about an hour and a half while the FAA restored the NOTAM system.
+
+    Friday's stop sat between the two. Like 2023, it halted departures and let flights already aloft finish their trips.
+    But it lasted more than twice as long, and it was declared in the middle of a busy afternoon rather than early in
+    the morning. Its cause, a communications failure affecting the en-route centers that handle aircraft at cruise
+    altitude, was still under investigation.
+
+    Smaller, airline-specific stops have become more common. Carriers asked the FAA to hold their own fleets after
+    technology failures at United in September 2023, at American, Delta, United and Allegiant during the CrowdStrike
+    outage of July 2024, at American on Christmas Eve 2024, and twice at Alaska Airlines in 2025.
+
+    <small>Sources: [Wikipedia: 2026 US ground stop](https://en.wikipedia.org/wiki/2026_US_ground_stop) ·
+    [Wikipedia: 2023 FAA system outage](https://en.wikipedia.org/wiki/2023_FAA_system_outage) ·
+    [Every US nationwide ground stop, from 9/11 to today](https://brendonbeebe.substack.com/p/every-us-nationwide-ground-stop-from) ·
+    [NPR on the 2023 outage](https://www.npr.org/2023/01/11/1148340708/faa-notam-ground-stop-flight-delay) ·
+    [Snopes on "first since 9/11"](https://www.snopes.com/fact-check/faa-orders-flights-grounded-first-time-since-911/)</small>
+    ''')
+    return
+
+
+@app.cell(hide_code=True)
 def _(mo):
     mo.accordion({"How we did this": mo.Html(f"""<div class="er-method">
     <h3>Data</h3>
@@ -955,6 +1422,26 @@ def _(mo):
     <b>Wide-body:</b> Boeing 747/767/777/787, Airbus A330/A340/A350/A380 or MD-11, the aircraft used on most long international
     routes. Some fly domestic routes too.
     <b>Wyoming:</b> the state's borders are lines of latitude and longitude, so a box is its exact outline.
+    <b>Airport stop time:</b> an airport's last airline departure before 12:53 p.m. Pacific (the collapse plus 15 minutes),
+    shown only for airports where at least six departures would normally have left between that time and 12:53. Takeoffs are assigned to the nearest airport with
+    scheduled service within about 10 km (<a href="https://ourairports.com/data/">OurAirports</a>).
+    <b>Aircraft on the ground:</b> positions reported as on the ground within about 4 km of an airport, every two minutes,
+    compared with the same airport between 10 a.m. and 12:38 p.m. that day (receiver coverage at the ground differs a lot between days),
+    smoothed with a 10-minute running median to remove brief bursts in the feed.
+    Parked aircraft often switch transponders off, so this mostly counts aircraft taxiing or waiting.
+    <b>Airspace:</b> simplified en-route center boundaries from the
+    <a href="https://github.com/vatsimnetwork/vatspy-data-project">VATSpy data project</a>, for illustration only.
+    <b>Cross-check:</b> an independent analysis posted during the stop, using
+    <a href="https://opensky-network.org">OpenSky Network</a> and adsb.lol live data
+    (<a href="https://x.com/jon_vs_moloch/status/2121395654354170192">post</a>), counted 1,083, 1,035 and 990 aircraft airborne
+    at 6:36, 6:42 and 6:49 p.m. Eastern; this data gives 1,060, 1,016 and 980 over the U.S. at the same moments, and the same
+    airport counts within a few aircraft. That post describes all en-route centers failing at once; this data shows
+    Chicago going quiet about 20 minutes before the rest of the country, and Alaska and Hawaii continuing to fly.
+    <b>Schedule estimate:</b> there is no airline schedule in ADS-B data, so each U.S. airline flight number's departure
+    time on Nov. 6 (a normal Friday) stands in for its schedule. Each Nov. 6 departure is matched to the first departure of
+    the same flight number on Nov. 13 between 90 minutes early and 12 hours late (Nov. 6's own delays make some flights
+    look early). Fractional and charter operators without fixed schedules are left out. Flight numbers come from the callsign the
+    aircraft was broadcasting at the time. The shares on the normal morning of Nov. 13 show how noisy this is.
     <b>Recovery time:</b> the first minute, from half an hour before the lift, after which airline takeoffs run at
     at least twice the ground-stop rate for 20 minutes straight.
     <b>Collapse time:</b> the first minute after 11 a.m. Pacific when airline takeoffs over the next three minutes average less
@@ -976,7 +1463,11 @@ def _(mo):
     <a href="https://www.nytimes.com/live/2026/11/13/us/ground-stop-nationwide-flights-faa">The New York Times</a> ·
     <a href="https://globalnews.ca/news/12150274/faa-usa-ground-stop-order/">Global News</a> ·
     <a href="https://www.aljazeera.com/news/2026/11/13/us-grounds-all-flights-after-communication-issue">Al Jazeera</a> ·
-    <a href="https://www.nbcwashington.com/news/national-international/faa-ground-stop-nationwide-us-airports/4182917/">NBC Washington</a></p>
+    <a href="https://www.nbcwashington.com/news/national-international/faa-ground-stop-nationwide-us-airports/4182917/">NBC Washington</a> ·
+    <a href="https://en.wikipedia.org/wiki/2026_US_ground_stop">Wikipedia</a> ·
+    <a href="https://www.youtube.com/watch?v=XNzzfW6Ki2I">CNN (live coverage)</a> ·
+    <a href="https://www.youtube.com/watch?v=VJ9BRW0LtOg">CNN (origin and stranded passengers)</a> ·
+    <a href="https://x.com/jon_vs_moloch/status/2121395654354170192">parallel ADS-B analysis</a></p>
     </div>""")})
     return
 
@@ -986,16 +1477,19 @@ def _(mo, prose):
     mo.vstack([mo.md("---"), prose("""
     *This report is a [marimo](https://marimo.io) notebook
     ([source](https://github.com/ktaletsk/261113-airplanes-grounded)). Every number and chart is computed from the data
-    shown at the top of the page; use the button there to fetch the newest data from adsb.lol and recompute everything.*
+    shown at the top of the page, from a fixed snapshot of the flight-tracking data.*
     """, cls="er-note")])
     return
 
 
 @app.cell(hide_code=True)
-def _(PT, dt, mo):
+def _(PT, dt):
     WINDOW_START = dt.datetime(2026, 11, 13, 18, 0, tzinfo=dt.timezone.utc)   # 10:00 PT on the ground-stop day
+    LOAD_START = WINDOW_START - dt.timedelta(hours=2)    # 2 h of lead-in so early departures can be matched to flight numbers
     MAX_HOURS = 24                       # stop downloading this many hours after WINDOW_START
     BASELINE_SHIFT = 86400               # compare with the same clock time one day earlier
+    SHIFTS = {"event": 0, "baseline": BASELINE_SHIFT, "week": 7 * 86400}   # "week" = Nov 6, a normal Friday
+    WEEK_LABEL = "Nov 6 (a normal Friday)"
     WORKERS = 6                          # parallel downloads (be gentle with adsb.lol)
     PERIOD_LABEL = {"event": "Nov 13 (ground stop)", "baseline": "Nov 12 (day before)"}
     CATS = ["Airline", "Business jet", "General aviation", "Helicopter", "Other"]
@@ -1016,7 +1510,8 @@ def _(PT, dt, mo):
         "Washington Dulles (IAD)": (38.95, -77.46), "Philadelphia (PHL)": (39.87, -75.24),
     }
 
-    refresh_btn = mo.ui.run_button(label="Fetch newest data", kind="neutral")
+    # The published notebook is static: it always opens the snapshot in public/bundle.npz.
+    # Rebuild that snapshot with scripts/update_snapshot.sh (sets EMPTY_SKIES_EXPORT and runs the raw-data pipeline).
     return (
         BASELINE_SHIFT,
         CATS,
@@ -1025,11 +1520,12 @@ def _(PT, dt, mo):
         HUBS,
         LIFT,
         LIFT_T,
+        LOAD_START,
         MAX_HOURS,
         PERIOD_LABEL,
+        SHIFTS,
         WINDOW_START,
         WORKERS,
-        refresh_btn,
     )
 
 
@@ -1071,6 +1567,7 @@ def _():
         Path,
         ThreadPoolExecutor,
         WASM,
+        ZoneInfo,
         alt,
         anywidget,
         as_completed,
@@ -1101,6 +1598,7 @@ def _(mo):
 @app.cell(hide_code=True)
 def _(
     COUNTRY_GRID,
+    PERIODS,
     PERIOD_LABEL,
     PRE,
     T0,
@@ -1114,22 +1612,36 @@ def _(
     # airborne aircraft per (aligned) minute over the US, by period and category; takeoffs/landings
     if PRE is None:
         _air = snap[(snap.alt_ft >= 0) & (snap.country == "US")]
-        counts = _air.groupby(["period", "category", "t"]).size().rename("n").reset_index()
-        moves_all = movements(snap)
-        moves_all["country"] = country_of(moves_all.lat.values, moves_all.lon.values, COUNTRY_GRID)
-        moves_all["region"] = region_of(moves_all.country.values, moves_all.lat.values, moves_all.lon.values)
-    else:                                   # browser build: computed upstream from full 1-minute tracks
-        counts, moves_all = PRE["counts"], PRE["moves"]
-    counts = counts[(counts.t >= T0) & (counts.t <= T_END)].copy()
+        counts_all = _air.groupby(["period", "category", "t"]).size().rename("n").reset_index()
+        moves_full = movements(snap)
+        moves_full["country"] = country_of(moves_full.lat.values, moves_full.lon.values, COUNTRY_GRID)
+        moves_full["region"] = region_of(moves_full.country.values, moves_full.lat.values, moves_full.lon.values)
+    else:                                   # snapshot: computed upstream from full 1-minute tracks
+        counts_all, moves_full = PRE["counts"], PRE["moves"]
+    _win = lambda d: d[(d.t >= T0) & (d.t <= T_END)].copy()
+    week_counts = _win(counts_all[counts_all.period == "week"])
+    counts = _win(counts_all[counts_all.period.isin(PERIODS)])
     counts["time_pt"] = to_pt(counts.t)
     total = counts.groupby(["period", "t", "time_pt"]).n.sum().reset_index()
     total["label"] = total.period.map(PERIOD_LABEL)
+    week_total = week_counts.groupby("t").n.sum()
 
     # ignore the first and last 15 min, where tracks are cut by the window edges
+    moves_all = moves_full[moves_full.period.isin(PERIODS)]
+    week_moves = moves_full[(moves_full.period == "week") & (moves_full.t >= T0 + 900) & (moves_full.t <= T_END - 900)]
     moves = moves_all[(moves_all.t >= T0 + 900) & (moves_all.t <= T_END - 900)].copy()
     moves["bin"] = moves.t // 300 * 300
     moves["time_pt"] = to_pt(moves["bin"])
-    return counts, moves, moves_all, total
+    return (
+        counts,
+        counts_all,
+        moves,
+        moves_all,
+        moves_full,
+        total,
+        week_moves,
+        week_total,
+    )
 
 
 @app.cell(hide_code=True)
@@ -1400,14 +1912,244 @@ def _(COLLAPSE_T, LIFT_T, T0, TOT_BS, TOT_EV, T_END, aircraft, moves, np, pd):
 
 
 @app.cell(hide_code=True)
+def _(COLLAPSE_T, LIFT_T, T0, T_END, moves_full, np, pd, week_moves):
+    DAY3 = {"event": "Nov. 13", "baseline": "Nov. 12 (day before)", "week": "Nov. 6 (a normal Friday)"}
+    _NOSCHED = r"^(EJA|LXJ|XOJ|JTL|FFL|TWY|PCM|SVW|EJM|JRE|VJA|GPD|PRD|CNS|KOW|NJE|EDG|WUP|XSR|JTZ)"   # fractional / charter
+    _isair = lambda m: m[(m.kind == "takeoff") & (m.category == "Airline") & (m.country == "US")
+                         & m.cs.astype(object).fillna("").astype(str).str.match(r"^[A-Z]{3}\d")
+                         & ~m.cs.astype(object).fillna("").astype(str).str.match(_NOSCHED)]
+    SCHED = _isair(week_moves[week_moves.region == "Lower 48"])[["cs", "t", "region"]].sort_values("t")
+    _ev_full = moves_full[(moves_full.period == "event") & (moves_full.t <= T_END - 900)]   # includes the 2-hour lead-in
+    ACT = _isair(_ev_full[_ev_full.region == "Lower 48"])[["cs", "t", "region"]].sort_values("t")
+    _EARLY, _LATE = 90 * 60, 12 * 3600
+    _act = {cs: g.t.values for cs, g in ACT.groupby("cs")}
+    _rows, _extra = [], []
+    for _cs, _g in SCHED.groupby("cs"):
+        _a = _act.get(_cs, np.array([]))
+        _taken = np.zeros(len(_a), bool)
+        for _s in _g.t.values:                     # greedy, in time order: first unused departure in [-90 min, +12 h]
+            _ok = np.nonzero(~_taken & (_a >= _s - _EARLY) & (_a <= _s + _LATE))[0]
+            if len(_ok):
+                _taken[_ok[0]] = True
+                _rows.append((_cs, _s, _a[_ok[0]]))
+            else:
+                _rows.append((_cs, _s, np.nan))
+        _extra += [(_cs, _t) for _t in _a[~_taken]]
+    for _cs, _a in _act.items():
+        if _cs not in set(SCHED.cs):
+            _extra += [(_cs, _t) for _t in _a]
+    MATCH = pd.DataFrame(_rows, columns=["cs", "sched_t", "actual_t"])
+    MATCH["delay_min"] = (MATCH.actual_t - MATCH.sched_t) / 60
+    MATCH["status"] = np.select(
+        [MATCH.actual_t.isna(), MATCH.delay_min <= 15, MATCH.delay_min <= 120],
+        ["not seen departing", "on time (±15 min)", "delayed under 2 h"], "delayed 2 h or more")
+    STATUSES = ["on time (±15 min)", "delayed under 2 h", "delayed 2 h or more", "not seen departing"]
+
+    def _shares(d):
+        return d.status.value_counts(normalize=True).reindex(STATUSES, fill_value=0) * 100
+
+    _c = COLLAPSE_T or T0
+    FLOOR = _shares(MATCH[(MATCH.sched_t >= T0 + 900) & (MATCH.sched_t < _c - 3600)])      # a normal morning
+    _stop = MATCH[(MATCH.sched_t >= _c) & (MATCH.sched_t < min(LIFT_T, T_END)) & ~(MATCH.actual_t < _c)]
+    _flew = _stop[_stop.actual_t.notna()]
+    STOP_N, STOP_FLEW = len(_stop), len(_flew)
+    STOP_DELAY_H = float(_flew.delay_min.median() / 60) if len(_flew) else None
+    STOP_MISSING = int(_stop.actual_t.isna().sum())
+    EST_MISSING = max(0, round(STOP_MISSING - FLOOR["not seen departing"] / 100 * STOP_N))
+
+    # who flew after the lift: held backlog vs regular evening flights
+    _after = ACT[ACT.t >= min(LIFT_T, T_END) - 1800][["cs", "t"]]
+    _m = MATCH.dropna(subset=["actual_t"]).set_index(["cs", "actual_t"])
+    def _kind(cs, t):
+        if (cs, t) not in _m.index:
+            return "no match on Nov. 6"
+        s = _m.loc[(cs, t), "sched_t"]
+        s = s.iloc[0] if hasattr(s, "iloc") else s
+        if _c <= s < LIFT_T:
+            return "held from the stop"
+        return "roughly on schedule" if t - s <= 3600 else "delayed evening flight"
+    BACKLOG = _after.assign(kind=[_kind(c, t) for c, t in zip(_after.cs, _after.t)])
+    BACKLOG_KINDS = ["held from the stop", "delayed evening flight", "roughly on schedule", "no match on Nov. 6"]
+    BACKLOG_PCT = round(100 * (BACKLOG.kind == "held from the stop").mean()) if len(BACKLOG) else None
+    _q = BACKLOG.groupby(BACKLOG.t // 900 * 900).size()
+    PEAK_T = int(_q.idxmax()) if len(_q) else None
+    _eve = MATCH[(MATCH.sched_t >= LIFT_T) & (MATCH.sched_t <= T_END - 1800)]
+    EVE_N = len(_eve)
+    EVE_ONSCHED_PCT = round(100 * ((_eve.actual_t.notna()) & (_eve.delay_min <= 60)).mean()) if EVE_N else None
+    EVE_SEEN_PCT = round(100 * _eve.actual_t.notna().mean()) if EVE_N else None
+    return (
+        BACKLOG,
+        BACKLOG_KINDS,
+        BACKLOG_PCT,
+        DAY3,
+        EST_MISSING,
+        EVE_ONSCHED_PCT,
+        EVE_SEEN_PCT,
+        FLOOR,
+        MATCH,
+        PEAK_T,
+        STATUSES,
+        STOP_DELAY_H,
+        STOP_FLEW,
+        STOP_MISSING,
+        STOP_N,
+    )
+
+
+@app.cell(hide_code=True)
 def _(
+    AIRPORTS,
+    COLLAPSE_T,
+    GROUND_STOP_T,
+    LIFT_T,
+    T0,
+    T_END,
+    aircraft,
+    moves_all,
+    nearest_airport,
+    np,
+    pd,
+    snap,
+):
+    CNN_ORIGIN = "https://www.youtube.com/watch?v=VJ9BRW0LtOg"
+    CNN_LIVE = "https://www.youtube.com/watch?v=XNzzfW6Ki2I"
+    NYT_CANCEL = "https://www.nytimes.com/live/2026/11/13/us/ground-stop-nationwide-flights-faa"
+    _c = COLLAPSE_T or T0
+    _W = r"^(B74|B77|B78|B76|A33|A34|A35|A38|MD11)"
+    _types = aircraft.drop_duplicates("hex").set_index("hex")["type"]
+    _atk = moves_all[(moves_all.kind == "takeoff") & (moves_all.category == "Airline") & (moves_all.region == "Lower 48")].copy()
+    _atk["apt"] = nearest_airport(_atk.lat.values, _atk.lon.values, AIRPORTS)
+    _atk["wide"] = (_atk.hex.map(_types).fillna("").astype(str).str.match(_W)
+                    & ~_atk.cs.astype(object).fillna("").astype(str).str.match(r"^(FDX|UPS|ABX|ATN)"))   # domestic cargo networks
+    APT_TK = _atk
+    _ev, _bs = _atk[_atk.period == "event"], _atk[_atk.period == "baseline"]
+    _names = AIRPORTS.drop_duplicates("code").set_index("code").name
+
+    # 1) when departures stopped at each busy airport: its last airline departure before the collapse + 15 minutes,
+    #    kept only where at least 6 departures would normally have left between then and collapse + 15 minutes
+    _end = _c + 900
+    _rows = []
+    for _a, _g in _ev[_ev.apt.notna()].groupby("apt"):
+        _b = _bs[_bs.apt == _a]
+        _busy = int(((_b.t >= _c - 5400) & (_b.t < _c + 1800)).sum())        # 2 normal hours around the collapse
+        _tt = _g.t.values[(_g.t.values >= _c - 3600) & (_g.t.values <= _end)]
+        if _busy < 20 or not len(_tt):
+            continue
+        _stop = int(_tt.max())
+        _exp = int(((_b.t > _stop) & (_b.t <= _end)).sum())
+        _rows.append({"apt": _a, "stop": _stop, "per_hr": _busy / 2, "missed": _exp})
+    APT_ALL = pd.DataFrame(_rows)
+    APT_STOP = (APT_ALL[(APT_ALL.missed >= 6) | (APT_ALL.apt == "MDW")].sort_values("stop").reset_index(drop=True)
+                if len(APT_ALL) else APT_ALL)                  # Midway kept: named by airline sources as the origin
+    APT_STOP["vs_collapse"] = (APT_STOP.stop - _c) / 60
+    APT_STOP = APT_STOP.merge(AIRPORTS.drop_duplicates("code")[["code", "lat", "lon"]], left_on="apt", right_on="code", how="left")
+    FIRST_APT = APT_STOP.iloc[0].to_dict() if len(APT_STOP) else None
+    APT_Q = (int(APT_STOP.stop.quantile(.25)), int(APT_STOP.stop.median()), int(APT_STOP.stop.quantile(.75))) if len(APT_STOP) else None
+    _stop_of = APT_STOP.set_index("apt").stop
+    ORD_STOP, MDW_STOP = _stop_of.get("ORD"), _stop_of.get("MDW")
+    ORD_MISSED = int(APT_STOP.set_index("apt").missed.get("ORD", 0))
+    MDW_RANK = (APT_STOP.apt.tolist().index("MDW") + 1) if "MDW" in APT_STOP.apt.values else None
+    _busiest = APT_STOP.sort_values("per_hr", ascending=False).apt.head(10).tolist()
+    GRID_APTS = APT_STOP[APT_STOP.apt.isin(set(_busiest) | {"ORD", "MDW"} | set(APT_STOP.apt.head(4)))].apt.tolist()
+
+    # 3) long-haul gateways during the stop: coastal vs inland
+    COASTAL = {"BOS", "JFK", "EWR", "LGA", "PHL", "IAD", "BWI", "MIA", "FLL", "SFO", "LAX", "SEA", "SAN", "OAK", "SJC", "PDX", "TPA", "MCO"}
+    _lo_, _hi_ = _c + 600, min(LIFT_T, T_END)
+    _wev = _ev[_ev.wide & (_ev.t >= _lo_) & (_ev.t < _hi_)]
+    _wbs = _bs[_bs.wide & (_bs.t >= _lo_) & (_bs.t < _hi_)]
+    GATEWAYS = pd.DataFrame({"nov13": _wev.groupby("apt").size(), "nov12": _wbs.groupby("apt").size()}).fillna(0).astype(int)
+    GATEWAYS = GATEWAYS[GATEWAYS.nov12 >= 5].sort_values("nov12", ascending=False)
+    GATEWAYS["first"] = _wev.groupby("apt").t.min().reindex(GATEWAYS.index)
+    GATEWAYS["kind"] = np.where(GATEWAYS.index.isin(COASTAL), "coastal gateway", "inland hub")
+    GATEWAYS = GATEWAYS.rename_axis("apt").reset_index()
+    _gk = GATEWAYS.groupby("kind")[["nov13", "nov12"]].sum()
+    GW_PCT = {k: round(100 * _gk.loc[k, "nov13"] / _gk.loc[k, "nov12"]) for k in _gk.index if _gk.loc[k, "nov12"]}
+
+    # what kept the departure line off zero during the stop
+    _stop_all = moves_all[(moves_all.kind == "takeoff") & (moves_all.category == "Airline") & (moves_all.country == "US")
+                          & (moves_all.period == "event") & (moves_all.t >= _c + 900) & (moves_all.t < _hi_)]
+    _wide_all = _stop_all.hex.map(_types).fillna("").astype(str).str.match(_W)
+    TRICKLE = {"n": len(_stop_all),
+               "akhi": round(100 * _stop_all.region.isin(["Alaska", "Hawaii"]).mean()) if len(_stop_all) else 0,
+               "wide48": round(100 * (_wide_all & (_stop_all.region == "Lower 48")).mean()) if len(_stop_all) else 0}
+
+    # example routes for the airspace map: coastal wide-bodies that left during the stop; inland ones from the day before
+    def _track(per, hx, t0, hours=4):
+        p = snap[(snap.period == per) & (snap.hex == hx) & (snap.t >= t0) & (snap.t <= t0 + hours * 3600)].sort_values("t")
+        return p[["lon", "lat"]].values.tolist()
+    _routes = []
+    for _a in ["SFO", "LAX", "JFK", "BOS"]:
+        for _, r in _wev[_wev.apt == _a].sort_values("t").head(1).iterrows():
+            _routes.append({"apt": _a, "cs": r.cs, "kind": "left during the stop (coastal)", "path": _track("event", r.hex, r.t)})
+    for _a in ["ORD", "DFW", "IAH", "DEN"]:
+        for _, r in _wbs[(_wbs.apt == _a) & ~_wbs.hex.isin(_wev.hex)].sort_values("t").head(1).iterrows():
+            _routes.append({"apt": _a, "cs": r.cs, "kind": "same hour on Nov. 12 (inland, held on Nov. 13)", "path": _track("baseline", r.hex, r.t)})
+    ROUTES = [r for r in _routes if len(r["path"]) >= 5]
+
+    # 4) tarmac: aircraft on the ground (transponder on) near airports
+    _gp = snap[(snap.alt_ft < 0) & (snap.country == "US")]
+    _gp = _gp.assign(apt=nearest_airport(_gp.lat.values, _gp.lon.values, AIRPORTS, maxd=0.04)).dropna(subset=["apt"])
+    GROUND = (_gp.groupby(["period", "apt", "t"]).size().rename("n")
+              .groupby(level=[0, 1], group_keys=False).apply(lambda x: x.rolling(5, center=True, min_periods=3).median()))
+    _rows = []
+    for _a in GROUND.loc["event"].index.get_level_values(0).unique():
+        _e = GROUND.loc[("event", _a)]
+        _b = GROUND.loc[("baseline", _a)] if ("baseline", _a) in GROUND.index else pd.Series(dtype=float)
+        # baseline = the same airport on the morning of Nov. 13 (10 a.m. to the collapse): same receivers, normal operations
+        _es, _bsn = _e[(_e.index >= GROUND_STOP_T) & (_e.index < _hi_)], _e[(_e.index >= T0) & (_e.index < _c)]
+        if len(_es) and len(_bsn) and _bsn.mean() >= 5:
+            _rows.append({"apt": _a, "peak": int(_es.max()), "peak_t": int(_es.idxmax()), "normal": float(_bsn.mean()),
+                          "ratio": float(_es.mean() / _bsn.mean()), "peak_ratio": float(_es.max() / _bsn.mean())})
+    TARMAC = pd.DataFrame(_rows).sort_values("ratio", ascending=False).reset_index(drop=True)
+    _tm = TARMAC.set_index("apt")
+    AUS_TARMAC = _tm.loc["AUS"].to_dict() if "AUS" in _tm.index else None
+    return (
+        APT_Q,
+        APT_STOP,
+        APT_TK,
+        AUS_TARMAC,
+        CNN_ORIGIN,
+        FIRST_APT,
+        GATEWAYS,
+        GRID_APTS,
+        GROUND,
+        GW_PCT,
+        MDW_STOP,
+        ORD_MISSED,
+        ORD_STOP,
+        ROUTES,
+        TARMAC,
+        TRICKLE,
+    )
+
+
+@app.cell(hide_code=True)
+def _(GROUND_STOP_T, LIFT_T, PERIODS, T_END, moves_all, snap):
+    OSINT_POST = "https://x.com/jon_vs_moloch/status/2121395654354170192"
+    _lo_, _hi_ = GROUND_STOP_T + 1800, min(LIFT_T, T_END)
+    _bj = moves_all[(moves_all.kind == "takeoff") & (moves_all.category == "Business jet") & (moves_all.region == "Lower 48")]
+    BJ_TK = {p: int(((_bj.period == p) & (_bj.t >= _lo_) & (_bj.t < _hi_)).sum()) for p in PERIODS}
+    def _hi_share(cat, p):
+        y = snap[(snap.period == p) & (snap.category == cat) & (snap.region == "Lower 48") & (snap.alt_ft > 0)
+                 & (snap.t >= _lo_) & (snap.t < _hi_)]
+        return round(100 * (y.alt_ft >= 18000).mean()) if len(y) else None
+    BJ_HIGH = {p: _hi_share("Business jet", p) for p in PERIODS}
+    GA_HIGH = {p: _hi_share("General aviation", p) for p in PERIODS}
+    return BJ_HIGH, BJ_TK, GA_HIGH, OSINT_POST
+
+
+@app.cell(hide_code=True)
+def _(
+    AIRPORTS,
+    AIRSPACE,
     Path,
+    T0,
     T_END,
     WASM,
     aircraft,
-    counts,
+    counts_all,
     missing,
-    moves_all,
+    moves_full,
     os,
     pack_bundle,
     snap,
@@ -1418,8 +2160,9 @@ def _(
     if EXPORT_TO and not WASM:
         _p = Path(EXPORT_TO)
         _p.parent.mkdir(parents=True, exist_ok=True)
-        pack_bundle(_p, snap, aircraft, counts, moves_all,
-                    {"T_END": T_END, "missing": missing, "built": int(time.time())})
+        pack_bundle(_p, snap, aircraft, counts_all, moves_full,
+                    {"T_END": T_END, "missing": missing, "built": int(time.time())}, t0=T0,
+                    airports=AIRPORTS, airspace=AIRSPACE)
         print(f"wrote {_p} ({_p.stat().st_size / 1e6:.1f} MB)")
     return
 
@@ -1475,9 +2218,10 @@ def _(
 
 
     def make_flightmap(period, cats):
-        s = snap[(snap.period == period) & snap.category.isin(cats) & (snap.t >= T0) & (snap.t <= T_END)]
+        _all = snap[(snap.period == period) & (snap.t >= T0) & (snap.t <= T_END)]
+        s = _all[_all.category.isin(cats)]
         by_min = {m: g for m, g in s.groupby("minute")}
-        mins = sorted(by_min)
+        mins = sorted(_all.minute.unique())          # slider range from all data, so an empty selection still shows the map
         shift = BASELINE_SHIFT if period == "baseline" else 0
         _n = s[(s.alt_ft >= 0) & (s.country == "US")].groupby("minute").size()
         step = 60 * MAP_STEP[period]
@@ -1512,21 +2256,7 @@ def _(
 
 
 @app.cell(hide_code=True)
-def _(
-    BASELINE_SHIFT,
-    CATS,
-    PT,
-    dt,
-    gzip,
-    io,
-    json,
-    mo,
-    np,
-    pd,
-    re,
-    time,
-    urllib,
-):
+def _(CATS, PT, SHIFTS, dt, gzip, io, json, mo, np, pd, re, time, urllib):
     # ---- adsb.lol readsb heatmap decoding -------------------------------------------------------------
     # One gzip file per 30-min UTC slot: little-endian int32 quads.
     #   slice marker  [0x0E7F7C9D, t_hi, t_lo(ms), _]  -> following rows belong to that 10 s snapshot
@@ -1586,7 +2316,7 @@ def _(
         is_cs = ~magic & (a[:, 1] >= 1 << 30) & (sid >= 0)
         is_pos = ~magic & (a[:, 1] < 1 << 30) & (sid >= 0)
         cs_bytes = a[is_cs][:, 2:4].copy().view(np.uint8).reshape(-1, 8)
-        calls = pd.DataFrame({"hex": hexv[is_cs],
+        calls = pd.DataFrame({"t": slice_t[sid[is_cs]], "hex": hexv[is_cs],
                               "callsign": [bytes(b).split(b"\x00")[0].decode("ascii", "replace").strip() for b in cs_bytes]})
         alt16 = (a[is_pos, 3] & 0xFFFF).astype(np.uint16).view(np.int16)
         pos = pd.DataFrame({
@@ -1613,9 +2343,12 @@ def _(
         la, lo = pos.lat.values, pos.lon.values
         pos = pos[(la >= NA_BBOX[0]) & (la <= NA_BBOX[1]) & (lo >= NA_BBOX[2]) & (lo <= NA_BBOX[3])]
         pos["minute"] = (pos.t // 60 * 60).astype(np.int64)
-        pos = pos.sort_values("t").drop_duplicates(["hex", "minute"], keep="last").drop(columns="t")
-        calls = calls[calls.callsign != ""].drop_duplicates("hex", keep="last")
-        return pos, calls
+        pos = pos.sort_values("t").drop_duplicates(["hex", "minute"], keep="last")
+        calls = calls[calls.callsign != ""].sort_values("t")
+        # flight number at that moment: nearest callsign broadcast by the same aircraft (aircraft fly several legs a day)
+        pos = pd.merge_asof(pos, calls.rename(columns={"callsign": "cs"}), on="t", by="hex",
+                            direction="nearest", tolerance=900).drop(columns="t")
+        return pos, calls.drop(columns="t").drop_duplicates("hex", keep="last")
 
 
     @mo.persistent_cache
@@ -1680,7 +2413,7 @@ def _(
         low = air & (alt_ <= low_ft)
         out = []
         for kind, m in (("takeoff", (air & prev_ground) | (new_track & low)), ("landing", (air & next_ground) | (end_track & low))):
-            out.append(df.loc[m, ["minute", "t", "period", "hex", "category", "lat", "lon"]].assign(kind=kind))
+            out.append(df.loc[m, ["minute", "t", "period", "hex", "category", "lat", "lon", "cs"]].assign(kind=kind))
         return pd.concat(out, ignore_index=True)
 
 
@@ -1755,6 +2488,7 @@ def _(
 
 
     PERIODS, KINDS = ["event", "baseline"], ["takeoff", "landing"]
+    ALL_PERIODS = ["event", "baseline", "week"]
     COUNTRIES, REGIONS = ["US", "Canada", "Mexico"], ["Lower 48", "Alaska", "Hawaii", "Canada", "Mexico"]
 
 
@@ -1762,14 +2496,15 @@ def _(
         return pd.Categorical(pd.Series(values).astype(str), categories=cats).codes.astype(np.int8)
 
 
-    def pack_bundle(path, snap, aircraft, counts, moves_all, meta, steps=None):
+    def pack_bundle(path, snap, aircraft, counts, moves_all, meta, steps=None, t0=None, airports=None, airspace=None):
         """Compact snapshot for the browser build. Map positions are kept every steps[period] minutes,
         quantized (~100-200 m) and delta-encoded along each aircraft's track; the per-minute counts and
         takeoff/landing events (which need full 1-minute tracks) are shipped precomputed."""
         steps = steps or {"event": 2, "baseline": 4}
         keep = np.zeros(len(snap), dtype=bool)
+        _t0 = t0 if t0 is not None else -np.inf
         for per, st in steps.items():
-            keep |= (snap.period.values == per) & (snap.minute.values % (60 * st) == 0)
+            keep |= (snap.period.values == per) & (snap.minute.values % (60 * st) == 0) & (snap.t.values >= _t0)
         s = snap[keep].sort_values(["period", "hex", "minute"])
         ac = aircraft[aircraft.hex.isin(s.hex.unique())]
         m = moves_all
@@ -1782,12 +2517,18 @@ def _(
             "s_hdg": (s.heading.values.astype(np.int32) * 256 // 360).astype(np.uint8),
             "s_cat": _codes(s.category, CATS), "s_country": _codes(s.country, COUNTRIES), "s_region": _codes(s.region, REGIONS),
             "a_hex": ac.hex.astype(np.int32), "a_cs": ustr(ac.callsign, 8), "a_type": ustr(ac.type, 4), "a_cat": _codes(ac.category, CATS),
-            "c_period": _codes(counts.period, PERIODS), "c_cat": _codes(counts.category, CATS),
+            "c_period": _codes(counts.period, ALL_PERIODS), "c_cat": _codes(counts.category, CATS),
             "c_t": (counts.t // 60).astype(np.int32), "c_n": counts.n.astype(np.int32),
-            "m_period": _codes(m.period, PERIODS), "m_min": (m.minute // 60).astype(np.int32), "m_hex": m.hex.astype(np.int32),
+            "m_period": _codes(m.period, ALL_PERIODS), "m_min": (m.minute // 60).astype(np.int32), "m_hex": m.hex.astype(np.int32),
             "m_cat": _codes(m.category, CATS), "m_lat": m.lat.astype(np.float32), "m_lon": m.lon.astype(np.float32),
             "m_kind": _codes(m.kind, KINDS), "m_country": _codes(m.country, COUNTRIES), "m_region": _codes(m.region, REGIONS),
-            "meta": np.frombuffer(json.dumps({**meta, "map_step": steps}).encode(), dtype=np.uint8),
+            "m_csv": np.asarray(_csv := sorted(set(m.cs.dropna().astype(str))), dtype="U8"),
+            "m_cs": pd.Categorical(m.cs.astype(object), categories=_csv).codes.astype(np.int32),
+            "meta": np.frombuffer(json.dumps({**meta, "map_step": steps, "airspace": airspace or []}).encode(), dtype=np.uint8),
+            "ap_code": np.asarray(airports.code.tolist() if airports is not None else [], dtype="U4"),
+            "ap_name": np.asarray(airports.name.str[:60].tolist() if airports is not None else [], dtype="U60"),
+            "ap_lat": np.asarray(airports.lat if airports is not None else [], dtype=np.float32),
+            "ap_lon": np.asarray(airports.lon if airports is not None else [], dtype=np.float32),
         }
         np.savez_compressed(path, **{k: np.asarray(v) for k, v in arrays.items()})
 
@@ -1806,19 +2547,23 @@ def _(
             "heading": (z["s_hdg"].astype(np.int32) * 360 // 256).astype(np.int16),
             "country": pd.Categorical(pick(z["s_country"], COUNTRIES)), "region": pd.Categorical(pick(z["s_region"], REGIONS)),
         })
-        snap["t"] = snap.minute + np.where(snap.period == "baseline", BASELINE_SHIFT, 0)
+        snap["t"] = snap.minute + snap.period.map(SHIFTS).astype(np.int64)
         aircraft = pd.DataFrame({"hex": z["a_hex"], "callsign": z["a_cs"].astype(object), "type": z["a_type"].astype(object),
                                  "category": pick(z["a_cat"], CATS)})
-        counts = pd.DataFrame({"period": pick(z["c_period"], PERIODS), "category": pick(z["c_cat"], CATS),
+        counts = pd.DataFrame({"period": pick(z["c_period"], ALL_PERIODS), "category": pick(z["c_cat"], CATS),
                                "t": z["c_t"].astype(np.int64) * 60, "n": z["c_n"]})
-        m_period = pick(z["m_period"], PERIODS)
+        m_period = pick(z["m_period"], ALL_PERIODS)
         m_minute = z["m_min"].astype(np.int64) * 60
         moves_all = pd.DataFrame({
-            "minute": m_minute, "t": m_minute + np.where(m_period == "baseline", BASELINE_SHIFT, 0), "period": m_period,
+            "minute": m_minute, "t": m_minute + pd.Series(m_period).map(SHIFTS).values.astype(np.int64), "period": m_period,
             "hex": z["m_hex"], "category": pick(z["m_cat"], CATS), "lat": z["m_lat"], "lon": z["m_lon"],
             "kind": pick(z["m_kind"], KINDS), "country": pick(z["m_country"], COUNTRIES), "region": pick(z["m_region"], REGIONS),
+            "cs": np.where(z["m_cs"] >= 0, np.append(z["m_csv"], "").astype(object)[z["m_cs"]], None),
         })
-        return snap, aircraft, {"counts": counts, "moves": moves_all}, meta
+        airports = pd.DataFrame({"code": z["ap_code"].astype(str), "name": z["ap_name"].astype(str),
+                                 "lat": z["ap_lat"], "lon": z["ap_lon"]}) if "ap_code" in z.files else pd.DataFrame(
+            columns=["code", "name", "lat", "lon"])
+        return snap, aircraft, {"counts": counts, "moves": moves_all, "airports": airports}, meta
 
 
     def read_bundle():
@@ -1834,6 +2579,65 @@ def _(
         if not resp.ok:
             raise RuntimeError(f"could not load {url}: HTTP {resp.status}")
         return unpack_bundle(await resp.bytes())
+
+
+    AIRPORTS_URL = "https://davidmegginson.github.io/ourairports-data/airports.csv"
+    AIRSPACE_URL = "https://raw.githubusercontent.com/vatsimnetwork/vatspy-data-project/master/Boundaries.geojson"
+
+
+    @mo.persistent_cache
+    def load_airports():
+        """US airports with scheduled service (OurAirports): IATA code, name, position."""
+        a = pd.read_csv(io.BytesIO(local_or_fetch("airports.csv", AIRPORTS_URL)), low_memory=False,
+                        usecols=["type", "name", "latitude_deg", "longitude_deg", "iso_country", "scheduled_service", "iata_code"])
+        a = a[(a.iso_country == "US") & a.type.isin(["large_airport", "medium_airport"])
+              & (a.scheduled_service == "yes") & a.iata_code.notna()]
+        return pd.DataFrame({"code": a.iata_code.values.astype(str), "name": a.name.values.astype(str),
+                             "lat": a.latitude_deg.values.astype(np.float32), "lon": a.longitude_deg.values.astype(np.float32)})
+
+
+    @mo.persistent_cache
+    def load_airspace():
+        """Simplified boundaries of the lower-48 en-route centers (ARTCCs) from the VATSpy data project, as GeoJSON features."""
+        d = json.loads(local_or_fetch("airspace.geojson", AIRSPACE_URL))
+        feats = []
+        for f in d["features"]:
+            i, oce = str(f["properties"].get("id", "")), str(f["properties"].get("oceanic")) == "1"
+            if not i.startswith("KZ") or "-" in i or oce or i == "KZAK":
+                continue
+            polys = f["geometry"]["coordinates"] if f["geometry"]["type"] == "MultiPolygon" else [f["geometry"]["coordinates"]]
+            out = []
+            for poly in polys:
+                rings = []
+                for k, ring in enumerate(poly):
+                    r = [[round(x, 2), round(y, 2)] for x, y in ring[::max(1, len(ring) // 300)]]
+                    if r[0] != r[-1]:
+                        r.append(r[0])
+                    if len(r) < 4:
+                        continue
+                    area = sum(x0 * y1 - x1 * y0 for (x0, y0), (x1, y1) in zip(r, r[1:]))
+                    if (k == 0 and area > 0) or (k > 0 and area < 0):     # d3 wants clockwise exteriors
+                        r = r[::-1]
+                    rings.append(r)
+                if rings:
+                    out.append(rings)
+            feats.append({"type": "Feature", "properties": {"id": i[1:], "lon": f["properties"].get("label_lon"),
+                                                             "lat": f["properties"].get("label_lat")},
+                          "geometry": {"type": "MultiPolygon", "coordinates": out}})
+        return feats
+
+
+    def nearest_airport(lat, lon, airports, maxd=0.09):
+        """IATA code of the nearest airport within maxd degrees (None otherwise)."""
+        la, lo = airports.lat.values.astype(float), airports.lon.values.astype(float)
+        lat, lon = np.asarray(lat, float), np.asarray(lon, float)
+        out = np.full(len(lat), None, dtype=object)
+        for i in range(0, len(lat), 20000):
+            d = np.hypot(lat[i:i + 20000, None] - la, (lon[i:i + 20000, None] - lo) * np.cos(np.radians(la)))
+            j = d.argmin(1)
+            ok = d[np.arange(len(j)), j] < maxd
+            out[i:i + 20000][ok] = airports.code.values[j[ok]]
+        return out
 
 
     def to_pt(unix):
@@ -1860,6 +2664,7 @@ def _(
         return None, None
 
     return (
+        ALL_PERIODS,
         BUNDLE_URL,
         Blocked,
         NotPublished,
@@ -1870,10 +2675,13 @@ def _(
         country_of,
         find_collapse,
         fmt_pt,
+        load_airports,
+        load_airspace,
         load_bundle,
         load_slot,
         load_type_db,
         movements,
+        nearest_airport,
         pack_bundle,
         read_bundle,
         region_of,
@@ -1889,7 +2697,20 @@ def _():
     const TILE_URL = (z, x, y) => `https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/${z}/${y}/${x}`;
     const STATES_URL = "https://cdn.jsdelivr.net/npm/us-atlas@3.0.1/states-10m.json";
     const TOPO_URL = "https://cdn.jsdelivr.net/npm/topojson-client@3.1.0/+esm";
-    const PLANE = new Path2D("M0,-9 L1.4,-5 L1.4,-1.5 L8,2.5 L8,4 L1.4,2 L1,6 L3.5,8 L3.5,9 L0,8 L-3.5,9 L-3.5,8 L-1,6 L-1.4,2 L-8,4 L-8,2.5 L-1.4,-1.5 L-1.4,-5 Z");
+    // one silhouette per category (index matches CATS: Airline, Business jet, General aviation, Helicopter, Other)
+    const GLYPH_D = [
+      "M0,-9 L1.4,-5 L1.4,-1.5 L8,2.5 L8,4 L1.4,2 L1,6 L3.5,8 L3.5,9 L0,8 L-3.5,9 L-3.5,8 L-1,6 L-1.4,2 L-8,4 L-8,2.5 L-1.4,-1.5 L-1.4,-5 Z",
+      "M0,-8 L0.7,-5 L0.7,0 L5.5,3.5 L5.5,4.5 L0.7,2.6 L0.7,5 L3,6.6 L3,7.6 L0,7 L-3,7.6 L-3,6.6 L-0.7,5 L-0.7,2.6 L-5.5,4.5 L-5.5,3.5 L-0.7,0 L-0.7,-5 Z",
+      "M0,-7 L0.8,-6 L0.8,-3.2 L7.5,-2.8 L7.5,-1.2 L0.8,-0.9 L0.6,4 L3,5 L3,6.2 L0,5.7 L-3,6.2 L-3,5 L-0.6,4 L-0.8,-0.9 L-7.5,-1.2 L-7.5,-2.8 L-0.8,-3.2 L-0.8,-6 Z",
+      "M0,-3.2 C1.6,-3.2 2,-1.5 2,0 C2,1.6 1.2,2.6 0.5,2.8 L0.4,7 L1.8,7.3 L1.8,8 L-1.8,8 L-1.8,7.3 L-0.4,7 L-0.5,2.8 C-1.2,2.6 -2,1.6 -2,0 C-2,-1.5 -1.6,-3.2 0,-3.2 Z",
+      "M0,-4.5 L3.2,0 L0,4.5 L-3.2,0 Z",
+    ];
+    const GLYPHS = GLYPH_D.map((d) => new Path2D(d));
+    const GLYPH_SCALE = [1, 0.85, 0.8, 0.95, 0.9];
+    const ROTOR = new Path2D("M0,0 m-6,0 a6,6 0 1,0 12,0 a6,6 0 1,0 -12,0");
+    const glyphSvg = (k) => `<svg width="18" height="18" viewBox="-10 -10 20 20" style="vertical-align:-4px;margin-right:6px">` +
+      (k === 3 ? `<path d="M0,0 m-6,0 a6,6 0 1,0 12,0 a6,6 0 1,0 -12,0" fill="none" stroke="currentColor" stroke-width="1.2"/>` : "") +
+      `<path d="${GLYPH_D[k]}" fill="currentColor"/></svg>`;
     const fmtPT = new Intl.DateTimeFormat("en-US", { timeZone: "America/Los_Angeles", hour: "2-digit", minute: "2-digit", hour12: false });
     const fmtUTC = new Intl.DateTimeFormat("en-US", { timeZone: "UTC", hour: "2-digit", minute: "2-digit", hour12: false });
     const fmtDay = new Intl.DateTimeFormat("en-US", { timeZone: "America/Los_Angeles", weekday: "short", month: "short", day: "numeric" });
@@ -1929,6 +2750,7 @@ def _():
             <div><span class="sw" style="background:rgb(255,216,74)"></span>~25,000 ft</div>
             <div><span class="sw" style="background:rgb(255,120,60)"></span>40,000 ft +</div>
             <div style="opacity:.75"><span class="sw" style="background:rgb(255,216,74);opacity:.35"></span>faded: Canada, Mexico</div>
+            <div class="fm-glyphs"></div>
             <div style="opacity:.6;margin-top:4px;font-size:10px">Basemap © Esri · states: US Census</div>
           </div>
           <canvas class="fm-spark"></canvas>
@@ -2024,9 +2846,13 @@ def _():
             pts.push([x, y, i]);
             ctx.save(); ctx.translate(x, y); ctx.rotate((f.hdg[i] * Math.PI) / 180);
             const ground = f.alt[i] < 0;
-            ctx.scale(ground ? s * 0.6 : s, ground ? s * 0.6 : s);
+            const info = aircraft[f.hex[i]], k = info ? info[2] : 4;
+            const gs = (ground ? s * 0.6 : s) * GLYPH_SCALE[k];
+            ctx.scale(gs, gs);
             ctx.globalAlpha = f.us && !f.us[i] ? 0.35 : 1;
-            ctx.fillStyle = altColor(f.alt[i]); ctx.fill(PLANE);
+            const col = altColor(f.alt[i]);
+            if (k === 3) { ctx.strokeStyle = col; ctx.lineWidth = 1.1 / gs * s; ctx.stroke(ROTOR); }
+            ctx.fillStyle = col; ctx.fill(GLYPHS[k]);
             ctx.restore();
           }
         }
@@ -2145,6 +2971,11 @@ def _():
         dirty = true;
       }, { passive: false });
 
+      const glyphLegend = () => {
+        $(".fm-glyphs").innerHTML = model.get("categories").map((c, k) => `<div>${glyphSvg(k)}${c}</div>`).join("");
+      };
+      model.on("change:categories", glyphLegend);
+      glyphLegend();
       setBounds(); hud();
       return () => { playing = false; };
     }
@@ -2175,6 +3006,9 @@ def _():
       padding: 5px 8px; font-size: 12px; white-space: nowrap; display: none; }
     .fm-hud .fm-event { font-weight: 600; margin-top: 2px; }
     .fm-hud .fm-event:empty { display: none; }
+    .fm-legend .fm-glyphs { margin-top: 6px; padding-top: 6px; border-top: 1px solid rgba(255,255,255,.15); }
+    .fm-legend .fm-glyphs div { display: flex; align-items: center; gap: 2px; }
+    .fm-legend .fm-glyphs svg { display: inline-block; flex: none; }
     '''
     return FLIGHTMAP_CSS, FLIGHTMAP_JS
 
