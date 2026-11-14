@@ -141,6 +141,12 @@ C["style"] = r'''def prose(text, cls="er-prose"):
 
 
 mo.Html("""
+<div class="er-loading">
+  <div class="er-loading-t">Empty skies</div>
+  <div class="er-loading-d">Loading the flight data and building the charts in your browser. This usually takes
+  10 to 30 seconds; the report appears here when it is ready.</div>
+  <div class="er-loading-bar"><span></span></div>
+</div>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;0,8..60,800;1,8..60,400&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
@@ -180,6 +186,14 @@ mo.Html("""
   .er-prose td:first-child { white-space: nowrap; }
   .er-prose td strong { font-family: Inter, sans-serif !important; font-size: 14px !important; }
   .er-prose small, .er-prose small a { font: 400 12.5px/1.5 Inter, sans-serif !important; opacity: .75; }
+  .er-loading { max-width: 720px; margin: 48px auto; font: 400 16px/1.5 Inter, sans-serif; }
+  .er-loading-t { font: 800 56px/1 'Source Serif 4', Georgia, serif; margin-bottom: 14px; opacity: .9; }
+  .er-loading-d { opacity: .7; }
+  .er-loading-bar { height: 3px; margin-top: 18px; background: rgba(127,127,127,.2); overflow: hidden; border-radius: 2px; }
+  .er-loading-bar span { display: block; height: 100%; width: 30%; background: #e03131;
+                         animation: er-slide 1.4s ease-in-out infinite; }
+  @keyframes er-slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(340%); } }
+  body:has(.er-hero) .er-loading { display: none; }
   .er-databar { max-width: 720px; margin: 0 auto; display: flex; align-items: center; gap: 16px;
                 font: 400 13px/1.45 Inter, sans-serif; padding: 10px 14px; border-radius: 8px;
                 background: rgba(127,127,127,.10); }
@@ -937,23 +951,22 @@ SCHED = _isair(week_moves[week_moves.region == "Lower 48"])[["cs", "t", "region"
 _ev_full = moves_full[(moves_full.period == "event") & (moves_full.t <= T_END - 900)]   # includes the 2-hour lead-in
 ACT = _isair(_ev_full[_ev_full.region == "Lower 48"])[["cs", "t", "region"]].sort_values("t")
 _EARLY, _LATE = 90 * 60, 12 * 3600
-_act = {cs: g.t.values for cs, g in ACT.groupby("cs")}
-_rows, _extra = [], []
-for _cs, _g in SCHED.groupby("cs"):
-    _a = _act.get(_cs, np.array([]))
-    _taken = np.zeros(len(_a), bool)
-    for _s in _g.t.values:                     # greedy, in time order: first unused departure in [-90 min, +12 h]
-        _ok = np.nonzero(~_taken & (_a >= _s - _EARLY) & (_a <= _s + _LATE))[0]
-        if len(_ok):
-            _taken[_ok[0]] = True
-            _rows.append((_cs, _s, _a[_ok[0]]))
-        else:
-            _rows.append((_cs, _s, np.nan))
-    _extra += [(_cs, _t) for _t in _a[~_taken]]
-for _cs, _a in _act.items():
-    if _cs not in set(SCHED.cs):
-        _extra += [(_cs, _t) for _t in _a]
-MATCH = pd.DataFrame(_rows, columns=["cs", "sched_t", "actual_t"])
+# match each Nov. 6 departure to the earliest free departure of the same flight number in [-90 min, +12 h];
+# a departure goes to the earliest schedule that claims it (vectorized greedy, converges in a few rounds)
+_S = SCHED[["cs", "t"]].rename(columns={"t": "sched_t"}).reset_index(drop=True)
+_A = ACT[["cs", "t"]].rename(columns={"t": "actual_t"}).reset_index(drop=True)
+_cand = _S.merge(_A, on="cs")
+_cand = _cand[(_cand.actual_t >= _cand.sched_t - _EARLY) & (_cand.actual_t <= _cand.sched_t + _LATE)].sort_values(
+    ["cs", "sched_t", "actual_t"])
+_got = []
+while len(_cand):
+    _first = _cand.drop_duplicates(["cs", "sched_t"]).drop_duplicates(["cs", "actual_t"])
+    _got.append(_first)
+    _ks = pd.MultiIndex.from_frame(_first[["cs", "sched_t"]]); _ka = pd.MultiIndex.from_frame(_first[["cs", "actual_t"]])
+    _cand = _cand[~pd.MultiIndex.from_frame(_cand[["cs", "sched_t"]]).isin(_ks)
+                  & ~pd.MultiIndex.from_frame(_cand[["cs", "actual_t"]]).isin(_ka)]
+_rows = _S.merge(pd.concat(_got) if _got else _S.iloc[:0].assign(actual_t=np.nan), on=["cs", "sched_t"], how="left")
+MATCH = _rows[["cs", "sched_t", "actual_t"]].copy()
 MATCH["delay_min"] = (MATCH.actual_t - MATCH.sched_t) / 60
 MATCH["status"] = np.select(
     [MATCH.actual_t.isna(), MATCH.delay_min <= 15, MATCH.delay_min <= 120],
@@ -974,16 +987,11 @@ EST_MISSING = max(0, round(STOP_MISSING - FLOOR["not seen departing"] / 100 * ST
 
 # who flew after the lift: held backlog vs regular evening flights
 _after = ACT[ACT.t >= min(LIFT_T, T_END) - 1800][["cs", "t"]]
-_m = MATCH.dropna(subset=["actual_t"]).set_index(["cs", "actual_t"])
-def _kind(cs, t):
-    if (cs, t) not in _m.index:
-        return "no match on Nov. 6"
-    s = _m.loc[(cs, t), "sched_t"]
-    s = s.iloc[0] if hasattr(s, "iloc") else s
-    if _c <= s < LIFT_T:
-        return "held from the stop"
-    return "roughly on schedule" if t - s <= 3600 else "delayed evening flight"
-BACKLOG = _after.assign(kind=[_kind(c, t) for c, t in zip(_after.cs, _after.t)])
+_bk = _after.merge(MATCH.dropna(subset=["actual_t"]).drop_duplicates(["cs", "actual_t"]),
+                   left_on=["cs", "t"], right_on=["cs", "actual_t"], how="left")
+BACKLOG = _after.assign(kind=np.select(
+    [_bk.sched_t.isna().values, ((_bk.sched_t >= _c) & (_bk.sched_t < LIFT_T)).values, ((_bk.t - _bk.sched_t) <= 3600).values],
+    ["no match on Nov. 6", "held from the stop", "roughly on schedule"], "delayed evening flight"))
 BACKLOG_KINDS = ["held from the stop", "delayed evening flight", "roughly on schedule", "no match on Nov. 6"]
 BACKLOG_PCT = round(100 * (BACKLOG.kind == "held from the stop").mean()) if len(BACKLOG) else None
 _q = BACKLOG.groupby(BACKLOG.t // 900 * 900).size()
