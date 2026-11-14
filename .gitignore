@@ -1,8 +1,8 @@
-# downloaded / derived data (the notebook fetches what it needs)
+# raw downloads and caches (the notebook fetches what it needs)
 data/
-public/
-__marimo__/
+__marimo__/cache/
 _site/
 media/
 __pycache__/
 .DS_Store
+# public/bundle.npz (the published snapshot) and __marimo__/session/ (static preview outputs) ARE committed

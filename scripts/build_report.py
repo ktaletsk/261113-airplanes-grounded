@@ -159,6 +159,12 @@ mo.Html("""
     .er-note p, .er-note em { font-family: Inter, sans-serif !important; font-size: 12.5px !important; }
   .er-note { font: 400 12.5px/1.5 Inter, sans-serif; opacity: .6; max-width: 720px; margin: 4px auto 0; }
   .er-method { font: 400 14.5px/1.6 Inter, sans-serif; }
+  .er-databar { max-width: 720px; margin: 0 auto; display: flex; align-items: center; gap: 16px;
+                font: 400 13px/1.45 Inter, sans-serif; padding: 10px 14px; border-radius: 8px;
+                background: rgba(127,127,127,.10); }
+  .er-databar span { flex: 1; opacity: .8; }
+  .er-databar button { flex-shrink: 0; white-space: nowrap; }
+  .er-databar-note { max-width: 720px; margin: 8px auto 0; }
   .er-method h3 { font-size: 15px; margin: 1.2em 0 .3em; }
 </style>
 """)'''
@@ -170,8 +176,8 @@ C["header"] = r'''mo.Html(f"""
   <p class="er-dek">Departures from U.S. airports stopped almost all at once at {fmt_pt(COLLAPSE_T) if COLLAPSE_T else "midday"} Pacific,
   {f"{GAP_MIN} minutes" if GAP_MIN else "shortly"} before the FAA's nationwide ground stop officially took effect.
   Then the sky slowly emptied.</p>
-  <div class="er-byline">Data: adsb.lol open ADS-B network · Live analysis, last data point
-  {fmt_pt(T_END)} PT · {"Snapshot rebuilt about every 30 minutes" if WASM else "Updated each time this notebook runs"}</div>
+  <div class="er-byline">Data: adsb.lol open ADS-B network · data through
+  {fmt_pt(T_END)} PT</div>
 </div>""")'''
 
 C["stats"] = r'''_stat = lambda v, l, cls="": f'<div class="er-stat"><div class="v {cls}">{v}</div><div class="l">{l}</div></div>'
@@ -354,13 +360,13 @@ only "Friday afternoon", and we could not find an official FAA timeline.</p>
 </div>""")})'''
 
 C["s_end"] = r'''mo.vstack([mo.md("---"), prose("""
-*This report is a [marimo](https://marimo.io) notebook. The numbers and charts are recomputed from the newest
-available data each time it runs. Use the button to pull in data published since the page loaded.*
+*This report is a [marimo](https://marimo.io) notebook
+([source](https://github.com/ktaletsk/261113-airplanes-grounded)). Every number and chart is computed from the data
+shown at the top of the page; use the button there to fetch the newest data from adsb.lol and recompute everything.*
 """, cls="er-note")])'''
 
 # config cell outputs the refresh button; place it near the end with the data-status line
-C["config"] = C["config"].replace("refresh_btn = mo.ui.run_button(label=\"Load newest data\", kind=\"success\")\nrefresh_btn",
-                                  "refresh_btn = mo.ui.run_button(label=\"Load newest data\", kind=\"neutral\")\nrefresh_btn")
+
 
 C["airborne_chart"] = C["airborne_chart"].replace(
     'title="Aircraft airborne over the US: ground-stop day vs the day before (same clock time)")',
@@ -508,13 +514,13 @@ C["findings2"] = f'NYT_AK = "{NYT_AK}"\nNYT_LIVE = "{NYT_LIVE}"\nGLOBAL_NEWS = "
 assert "country_grid" in C["helpers"] and '"us": (g.country' in C["widget"]
 
 for _k, _needle in [("config", "GROUND_STOP_T"), ("helpers", '"lat", "lon"]].assign'), ("config", "CATS ="),
-                    ("config", 'kind="neutral"'), ("load", "Fetching the latest")]:
+                    ("config", 'Fetch newest data'), ("load", "Fetching the latest")]:
     assert _needle in C[_k], (_k, _needle)
 assert "EVENTS = pd.DataFrame" not in C["config"]
 
-ORDER = ["style", "header", "stats", "lede", "s_cliff", "cliff_chart", "s_where", "zones_chart", "hubs_chart", "s_states", "states_chart", "s_neighbors", "neighbors_chart",
+ORDER = ["style", "header", "load", "stats", "lede", "s_cliff", "cliff_chart", "s_where", "zones_chart", "hubs_chart", "s_states", "states_chart", "s_neighbors", "neighbors_chart",
          "s_map", "map_controls", "map", "s_landings", "airborne_chart", "moves_chart", "s_alt", "alt_chart",
-         "s_who", "category_chart", "method", "config", "load", "s_end",
+         "s_who", "category_chart", "method", "s_end", "config",
          "imports", "derive", "findings", "findings2", "export", "events_fn", "widget", "helpers", "assets"]
 
 async with cm.get_context(skip_staleness_check=True) as ctx:

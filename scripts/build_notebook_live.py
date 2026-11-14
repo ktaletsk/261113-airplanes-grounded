@@ -53,8 +53,7 @@ EVENTS = pd.DataFrame([
      "hud": "FAA nationwide ground stop in effect"},
 ])
 
-refresh_btn = mo.ui.run_button(label="Load newest data", kind="success")
-refresh_btn'''
+refresh_btn = mo.ui.run_button(label="Fetch newest data", kind="neutral")'''
 
 C["helpers"] = r'''# ---- adsb.lol readsb heatmap decoding -------------------------------------------------------------
 # One gzip file per 30-min UTC slot: little-endian int32 quads.
@@ -68,12 +67,21 @@ LOCAL = mo.notebook_dir() / "data"
 UA = {"User-Agent": "Mozilla/5.0 (marimo notebook; ground-stop visualization)"}
 
 
+BUNDLE_URL = "https://raw.githubusercontent.com/ktaletsk/261113-airplanes-grounded/main/public/bundle.npz"
+
+
+class Blocked(Exception):
+    """adsb.lol refused this network (it blocks many cloud/data-center IP ranges)."""
+
+
 def fetch(url, timeout=180, tries=3):
     for i in range(tries):
         try:
             with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=timeout) as r:
                 return r.read()
         except urllib.error.HTTPError as e:
+            if e.code in (401, 403) and "adsb.lol" in url:
+                raise Blocked(e.read()[:400].decode("utf-8", "replace").strip()) from None
             if e.code in (404, 502, 503) and i == tries - 1:
                 return None
         except Exception:
@@ -340,6 +348,12 @@ def unpack_bundle(raw):
     return snap, aircraft, {"counts": counts, "moves": moves_all}, meta
 
 
+def read_bundle():
+    """Server side (molab / local): the published snapshot next to the notebook, else the copy on GitHub."""
+    p = mo.notebook_dir() / "public" / "bundle.npz"
+    return unpack_bundle(p.read_bytes() if p.exists() else fetch(BUNDLE_URL))
+
+
 async def load_bundle(url):
     """Browser build: fetch the snapshot that GitHub Actions publishes next to the page."""
     from pyodide.http import pyfetch
@@ -353,67 +367,87 @@ def to_pt(unix):
     """unix seconds -> naive Pacific datetimes (what the charts use)."""
     return pd.to_datetime(unix, unit="s", utc=True).dt.tz_convert(PT).dt.tz_localize(None)'''
 
-C["load"] = r'''refresh_btn  # re-run this cell (and everything below) when the button is pressed
+C["load"] = r'''# Default: the precomputed snapshot (public/bundle.npz) -> opens instantly, no download from adsb.lol.
+# "Fetch newest data" (or EMPTY_SKIES_EXPORT, used to rebuild the snapshot) downloads and processes the raw files.
 T0 = int(WINDOW_START.timestamp())
+_fresh = bool(refresh_btn.value) or bool(os.environ.get("EMPTY_SKIES_EXPORT"))
+DATA_SOURCE, NOTICE, PRE = "snapshot", None, None
 
 if WASM:
-    # browser build: the compact snapshot that GitHub Actions rebuilds and publishes next to the page
-    snap, aircraft, PRE, _meta = await load_bundle(mo.notebook_location() / "public" / "bundle.npz")
-    missing, T_END, MAP_STEP, DATA_BUILT = _meta["missing"], _meta["T_END"], _meta["map_step"], _meta["built"]
+    try:
+        snap, aircraft, PRE, _meta = await load_bundle(mo.notebook_location() / "public" / "bundle.npz")
+    except Exception:
+        snap, aircraft, PRE, _meta = await load_bundle(BUNDLE_URL)
+elif not _fresh:
+    snap, aircraft, PRE, _meta = read_bundle()
 else:
-    _now = dt.datetime.now(dt.timezone.utc)
-    _end = min(_now, WINDOW_START + dt.timedelta(hours=MAX_HOURS))
-    _jobs = []
-    _t = WINDOW_START
-    while _t < _end:
-        _jobs += [("event", _t), ("baseline", _t - dt.timedelta(seconds=BASELINE_SHIFT))]
-        _t += dt.timedelta(minutes=30)
+    try:
+        _now = dt.datetime.now(dt.timezone.utc)
+        _end = min(_now, WINDOW_START + dt.timedelta(hours=MAX_HOURS))
+        _jobs = []
+        _t = WINDOW_START
+        while _t < _end:
+            _jobs += [("event", _t), ("baseline", _t - dt.timedelta(seconds=BASELINE_SHIFT))]
+            _t += dt.timedelta(minutes=30)
 
-    _frames, _calls, missing = [], [], []
-    with mo.status.progress_bar(total=len(_jobs) + 1, title="Downloading ADS-B snapshots from adsb.lol",
-                                subtitle=f"{len(_jobs)} half-hour files (~10–25 MB each; cached after the first load)", remove_on_exit=True) as _bar:
-        with ThreadPoolExecutor(WORKERS) as _ex:
-            _futs = {_ex.submit(load_slot, _ts.isoformat()): (_p, _ts) for _p, _ts in _jobs}
-            _types = _ex.submit(load_type_db)
-            for _f in as_completed(_futs):
-                _p, _ts = _futs[_f]
-                try:
-                    _pos, _cs1 = _f.result()
-                    _frames.append(_pos.assign(period=_p))
-                    _calls.append(_cs1)
-                except NotPublished:
-                    missing.append(f"{_p} {_ts:%m-%d %H:%M} UTC")
+        _frames, _calls, missing = [], [], []
+        with mo.status.progress_bar(total=len(_jobs) + 1, title="Downloading ADS-B snapshots from adsb.lol",
+                                    subtitle=f"{len(_jobs)} half-hour files (~10–25 MB each; cached after the first load)", remove_on_exit=True) as _bar:
+            with ThreadPoolExecutor(WORKERS) as _ex:
+                _futs = {_ex.submit(load_slot, _ts.isoformat()): (_p, _ts) for _p, _ts in _jobs}
+                _types = _ex.submit(load_type_db)
+                for _f in as_completed(_futs):
+                    _p, _ts = _futs[_f]
+                    try:
+                        _pos, _cs1 = _f.result()
+                        _frames.append(_pos.assign(period=_p))
+                        _calls.append(_cs1)
+                    except NotPublished:
+                        missing.append(f"{_p} {_ts:%m-%d %H:%M} UTC")
+                    _bar.update()
+                type_db = _types.result()
                 _bar.update()
-            type_db = _types.result()
-            _bar.update()
 
-    snap = pd.concat(_frames, ignore_index=True)
-    # country from real borders (world-atlas 50m), extended ~100 km offshore; drop everything else
-    COUNTRY_GRID = country_grid(1.0)
-    snap["country"] = country_of(snap.lat.values, snap.lon.values, COUNTRY_GRID)
-    snap = snap[snap.country != ""]
-    snap["region"] = pd.Categorical(region_of(snap.country.values, snap.lat.values, snap.lon.values))
-    snap["country"] = pd.Categorical(snap.country)
-    # drop feed hiccups: minutes with < 60% of the aircraft seen in the surrounding minutes
-    _n = snap.groupby(["period", "minute"]).size()
-    _bad = _n[_n < 0.6 * _n.rolling(9, center=True, min_periods=1).median()].index.get_level_values("minute")
-    snap = snap[~snap.minute.isin(_bad)]
-    snap["t"] = snap.minute + np.where(snap.period == "baseline", BASELINE_SHIFT, 0)   # aligned clock (event day)
+        snap = pd.concat(_frames, ignore_index=True)
+        # country from real borders (world-atlas 50m), extended ~100 km offshore; drop everything else
+        COUNTRY_GRID = country_grid(1.0)
+        snap["country"] = country_of(snap.lat.values, snap.lon.values, COUNTRY_GRID)
+        snap = snap[snap.country != ""]
+        snap["region"] = pd.Categorical(region_of(snap.country.values, snap.lat.values, snap.lon.values))
+        snap["country"] = pd.Categorical(snap.country)
+        # drop feed hiccups: minutes with < 60% of the aircraft seen in the surrounding minutes
+        _n = snap.groupby(["period", "minute"]).size()
+        _bad = _n[_n < 0.6 * _n.rolling(9, center=True, min_periods=1).median()].index.get_level_values("minute")
+        snap = snap[~snap.minute.isin(_bad)]
+        snap["t"] = snap.minute + np.where(snap.period == "baseline", BASELINE_SHIFT, 0)   # aligned clock (event day)
 
-    _cs = pd.concat(_calls).drop_duplicates("hex", keep="last")
-    aircraft = (pd.DataFrame({"hex": snap.hex.unique()}).merge(_cs, on="hex", how="left")
-                .merge(type_db, on="hex", how="left"))
-    aircraft["category"] = categorize(aircraft.callsign, aircraft.desc, aircraft.wtc)
-    snap = add_heading(snap.merge(aircraft[["hex", "category"]], on="hex", how="left"))
+        _cs = pd.concat(_calls).drop_duplicates("hex", keep="last")
+        aircraft = (pd.DataFrame({"hex": snap.hex.unique()}).merge(_cs, on="hex", how="left")
+                    .merge(type_db, on="hex", how="left"))
+        aircraft["category"] = categorize(aircraft.callsign, aircraft.desc, aircraft.wtc)
+        snap = add_heading(snap.merge(aircraft[["hex", "category"]], on="hex", how="left"))
+        if not _frames:
+            raise NotPublished("no half-hour files could be downloaded")
+        DATA_SOURCE = "live"
+    except (Blocked, NotPublished) as _e:
+        NOTICE = f"Could not fetch new data from adsb.lol, so this shows the published snapshot instead. adsb.lol said: {_e}"
+        snap, aircraft, PRE, _meta = read_bundle()
+
+if DATA_SOURCE == "live":
     PRE, MAP_STEP, DATA_BUILT = None, {"event": 1, "baseline": 1}, int(time.time())
     T_END = int(snap[snap.period == "event"].t.max())
+else:
+    missing, T_END, MAP_STEP, DATA_BUILT = _meta["missing"], _meta["T_END"], _meta["map_step"], _meta["built"]
 
-_last = dt.datetime.fromtimestamp(T_END, PT)
-mo.md(f"Loaded **{len(snap):,}** aircraft positions for **{snap.hex.nunique():,}** aircraft. "
-      f"Ground-stop day data runs **10:00 → {_last:%H:%M} PT** ({dt.datetime.fromtimestamp(T_END, dt.timezone.utc):%H:%M UTC}); "
-      + (f"snapshot built {dt.datetime.fromtimestamp(DATA_BUILT, PT):%b %-d, %H:%M PT}." if WASM
-         else f"loaded at {dt.datetime.now(PT):%H:%M PT}.")
-      + (f"  \n<small>Not published yet / unavailable: {', '.join(sorted(missing))}</small>" if missing else ""))'''
+_built = dt.datetime.fromtimestamp(DATA_BUILT, PT)
+_status = (f"<b>Live data</b> fetched from adsb.lol at {_built:%-I:%M %p} PT, through {fmt_pt(T_END)} PT."
+           if DATA_SOURCE == "live" else
+           f"Showing the <b>published snapshot</b>: built {_built:%b %-d, %-I:%M %p} PT, data through {fmt_pt(T_END)} PT."
+           + ("" if WASM else " The button downloads the newest data from adsb.lol and recomputes everything (a minute or two)."))
+mo.vstack([
+    mo.Html(f'<div class="er-databar"><span>{_status}</span>{"" if WASM else refresh_btn}</div>'),
+    mo.Html(f'<div class="er-databar-note">{mo.callout(mo.md(NOTICE), kind="warn").text}</div>') if NOTICE else mo.md(""),
+])'''
 
 C["events_fn"] = r'''def with_events(chart):
     """Layer the EVENTS markers (dashed rule + label) on a chart whose x is time_pt."""

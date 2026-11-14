@@ -3,7 +3,10 @@
 A flight-tracking analysis of the nationwide U.S. ground stop on **Nov. 13, 2026**, built as a
 [marimo](https://marimo.io) notebook.
 
-**Read it:** https://ktaletsk.github.io/261113-airplanes-grounded/ (runs in your browser, nothing to install)
+**Read it**
+- molab (interactive, runs in your browser): https://molab.marimo.io/github/ktaletsk/261113-airplanes-grounded/blob/main/grounded.py/wasm
+- molab static preview: https://molab.marimo.io/github/ktaletsk/261113-airplanes-grounded/blob/main/grounded.py
+- GitHub Pages: https://ktaletsk.github.io/261113-airplanes-grounded/
 
 ## What it shows
 
@@ -22,20 +25,30 @@ hold every aircraft every 10 seconds, one file per half hour. Aircraft types com
 [tar1090 database](https://github.com/wiedehopf/tar1090-db), and borders from
 [Natural Earth / world-atlas](https://github.com/topojson/world-atlas).
 
-## Two ways to run it
+## How the data gets in
 
-| | Data | How |
+The notebook opens on a **published snapshot**, `public/bundle.npz` (about 12 MB), so it loads in seconds
+with nothing to download from adsb.lol. The snapshot holds:
+- map positions every 2 minutes (every 4 minutes for the comparison day);
+- per-minute counts;
+- every takeoff and landing, computed from the full 1-minute tracks.
+
+| Where | Default | "Fetch newest data" |
 |---|---|---|
-| **GitHub Pages** (WebAssembly) | A compact snapshot (`public/bundle.npz`), rebuilt by GitHub Actions about every 30 minutes | Just open the link above |
-| **molab or locally** | Downloads the newest adsb.lol files itself; the **Load newest data** button pulls in new half hours | `uvx marimo edit --sandbox grounded.py` |
+| molab server session / local `marimo edit` | the snapshot | downloads the newest half-hour files from adsb.lol, processes them (cached with `mo.persistent_cache`) and recomputes everything |
+| browser (molab `/wasm`, GitHub Pages) | the snapshot | not available |
 
-The notebook checks whether it is running in the browser (`sys.platform == "emscripten"`). There it loads
-the snapshot; everywhere else it downloads and processes the raw files, caching each processed half hour
-with `mo.persistent_cache`.
+adsb.lol blocks many cloud networks (GitHub Actions runners are blocked). If a fetch is refused, the notebook
+shows adsb.lol's message and keeps the snapshot.
 
-The workflow in `.github/workflows/publish.yml` runs the notebook as a script with
-`EMPTY_SKIES_EXPORT=public/bundle.npz` to write the snapshot, then runs
-`marimo export html-wasm --mode run` and deploys the result to Pages.
+**Refreshing the snapshot** (from a normal home or office connection):
+
+```bash
+scripts/update_snapshot.sh   # rebuilds public/bundle.npz and the static-preview session file
+git add public/bundle.npz __marimo__/session && git commit -m "Update data snapshot" && git push
+```
+
+Pushing re-deploys GitHub Pages (`.github/workflows/publish.yml` only exports and deploys; it never contacts adsb.lol).
 
 ## Files
 
@@ -44,4 +57,5 @@ The workflow in `.github/workflows/publish.yml` runs the notebook as a script wi
   `scripts/build_notebook_live.py`.
 - `scripts/build_report.py`: rebuilds the notebook's cells from source. Run it inside a running
   notebook with the marimo-pair tooling.
+- `scripts/update_snapshot.sh`: rebuilds the published snapshot and the static-preview outputs.
 - `scripts/download.sh`: optional; pre-downloads raw files into `data/` for faster local runs.
