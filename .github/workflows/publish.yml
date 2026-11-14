@@ -49,6 +49,15 @@ jobs:
           key: marimo-cache-${{ github.run_id }}
           restore-keys: marimo-cache-
 
+      - name: Check that adsb.lol is reachable from the runner
+        run: |
+          for ua in "Mozilla/5.0" "Mozilla/5.0 (marimo notebook; ground-stop visualization)"; do
+            curl -s -o /tmp/probe -D /tmp/headers -m 60 -A "$ua" -w "%{http_code} %{size_download} bytes  UA=$ua\n" \
+              https://adsb.lol/globe_history/2026/11/13/heatmap/40.bin.ttf || true
+            grep -i "^server\|^cf-\|^content-type" /tmp/headers || true
+            head -c 300 /tmp/probe | tr -c '[:print:]\n' '.'; echo
+          done
+
       - name: Build the data snapshot
         env:
           EMPTY_SKIES_EXPORT: public/bundle.npz
