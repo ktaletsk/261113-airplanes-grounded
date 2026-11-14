@@ -32,6 +32,9 @@ EVENTS = pd.DataFrame([
 ''', r'''# FAA nationwide ground stop took effect 2:54 p.m. Central (News9). The departure collapse is detected from the data.
 GROUND_STOP = dt.datetime(2026, 11, 13, 12, 54)          # naive PT
 GROUND_STOP_T = int(GROUND_STOP.replace(tzinfo=PT).timestamp())
+# FAA lifted the stop at 8:15 p.m. Eastern (Al Jazeera, NBC); departures' restart is detected from the data
+LIFT = dt.datetime(2026, 11, 13, 17, 15)               # naive PT
+LIFT_T = int(LIFT.replace(tzinfo=PT).timestamp())
 HUBS = {  # major US airports (lat, lon) for the hub comparison
     "Atlanta (ATL)": (33.64, -84.43), "Dallas–Fort Worth area": (32.90, -97.04), "Denver (DEN)": (39.86, -104.67),
     "Chicago O'Hare (ORD)": (41.98, -87.90), "Los Angeles (LAX)": (33.94, -118.41), "Charlotte (CLT)": (35.21, -80.94),
@@ -116,16 +119,20 @@ else:
 _tot = total.set_index(["period", "t"]).n
 _ref_t = (COLLAPSE_T or T0) // 60 * 60
 AIR_BEFORE = int(_tot.get(("event", _ref_t), 0))
-AIR_NOW = int(_tot.get(("event", T_END), 0))
-AIR_NOW_BASE = int(_tot.get(("baseline", T_END), 0))
-_lat = counts[counts.t == T_END].pivot_table(index="category", columns="period", values="n", observed=True)
+TOT_EV, TOT_BS = _tot["event"], _tot["baseline"]
+_low = TOT_EV[TOT_EV.index >= (COLLAPSE_T or T0)]
+AIR_MIN_T, AIR_MIN = int(_low.idxmin()), int(_low.min())
+AIR_MIN_BASE = int(TOT_BS.asof(AIR_MIN_T))
+_lat = counts[counts.t == AIR_MIN_T].pivot_table(index="category", columns="period", values="n", observed=True)
 CAT_NOW = (100 * _lat["event"] / _lat["baseline"]).round().dropna().astype(int).to_dict() if "baseline" in _lat else {}
 
 EVENTS = pd.DataFrame(
     ([{"t": dt.datetime.fromtimestamp(COLLAPSE_T, PT).replace(tzinfo=None), "label": f"departures collapse {fmt_pt(COLLAPSE_T)} ",
        "color": "#f08c00", "align": "right", "hud": f"Departures collapsing ({fmt_pt(COLLAPSE_T)} PT)"}] if COLLAPSE_T else [])
     + [{"t": GROUND_STOP, "label": " FAA ground stop 12:54 p.m. PT", "color": "#e03131", "align": "left",
-        "hud": "FAA nationwide ground stop in effect"}])'''
+        "hud": "FAA nationwide ground stop in effect"}]
+    + ([{"t": LIFT, "label": " stop lifted 5:15 p.m.", "color": "#2f9e44", "align": "left",
+         "hud": "Ground stop lifted (5:15 p.m. PT)"}] if LIFT_T <= T_END else []))'''
 
 # ---------------------------------------------------------------- styling + narrative
 C["style"] = r'''def prose(text, cls="er-prose"):
@@ -157,11 +164,15 @@ mo.Html("""
   .er-byline { font: 500 13px Inter, sans-serif; opacity: .6; border-top: 1px solid rgba(127,127,127,.3); padding-top: 12px; }
   .er-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 18px; padding: 14px 0 6px; }
   .er-stat .v { font: 700 34px/1.1 Inter, sans-serif; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
-  .er-stat .v.hot { color: #e03131; } .er-stat .v.warm { color: #f08c00; }
+  .er-stat .v.hot { color: #e03131; } .er-stat .v.warm { color: #f08c00; } .er-stat .v.good { color: #2f9e44; }
   .er-stat .l { font: 400 13.5px/1.35 Inter, sans-serif; opacity: .7; margin-top: 4px; }
     .er-note p, .er-note em { font-family: Inter, sans-serif !important; font-size: 12.5px !important; }
   .er-note { font: 400 12.5px/1.5 Inter, sans-serif; opacity: .6; max-width: 720px; margin: 4px auto 0; }
   .er-method { font: 400 14.5px/1.6 Inter, sans-serif; }
+  .er-part { max-width: 720px; margin: 64px auto 8px; padding-top: 22px; border-top: 3px solid currentColor; }
+  .er-part-n { font: 700 12px Inter, sans-serif; letter-spacing: .16em; text-transform: uppercase; color: #e03131; }
+  .er-part-t { font: 800 40px/1.1 'Source Serif 4', Georgia, serif; margin: 6px 0 6px; }
+  .er-part-d { font: 400 19px/1.4 'Source Serif 4', Georgia, serif; opacity: .7; }
   .er-databar { max-width: 720px; margin: 0 auto; display: flex; align-items: center; gap: 16px;
                 font: 400 13px/1.45 Inter, sans-serif; padding: 10px 14px; border-radius: 8px;
                 background: rgba(127,127,127,.10); }
@@ -178,8 +189,8 @@ mo.Html('<div class="er-stats">'
         + _stat(fmt_pt(COLLAPSE_T).split()[0] if COLLAPSE_T else "–", "p.m. Pacific: airline takeoffs fall off a cliff", "warm")
         + _stat(f"{GAP_MIN} min" if GAP_MIN else "–", "before the FAA ground stop took effect (2:54 p.m. Central)", "hot")
         + _stat(f"{BEFORE_RATE:.0f} → {AFTER_RATE:.0f}" if AFTER_RATE is not None else "–", "airline takeoffs per minute, before → after")
-        + _stat(f"−{100 * (1 - AIR_NOW / AIR_BEFORE):.0f}%" if AIR_BEFORE else "–",
-                f"aircraft airborne over the U.S. since the collapse ({AIR_BEFORE:,} → {AIR_NOW:,})")
+        + _stat(f"−{100 * (1 - AIR_MIN / AIR_BEFORE):.0f}%" if AIR_BEFORE else "–",
+                f"aircraft airborne over the U.S., collapse to low point ({AIR_BEFORE:,} → {AIR_MIN:,})")
         + '</div>')'''
 
 C["lede"] = r'''prose(f"""
@@ -194,8 +205,8 @@ outage affecting air traffic control, took effect at 2:54 p.m. Central (12:54 p.
 Public flight-tracking data shows **the departures stopped {GAP_MIN} minutes before that**.
 
 Nothing new was going up. The flights already in the air carried on to their destinations, and the number of
-aircraft over the country fell steadily, from **{AIR_BEFORE:,}** at the moment of the collapse to **{AIR_NOW:,}**
-at {fmt_pt(T_END)} Pacific. A day earlier at the same time, {AIR_NOW_BASE:,} aircraft were airborne.
+aircraft over the country fell steadily, from **{AIR_BEFORE:,}** at the moment of the collapse to **{AIR_MIN:,}**
+at the low point, {fmt_pt(AIR_MIN_T)} Pacific. A day earlier at the same time, {AIR_MIN_BASE:,} aircraft were airborne.
 """)'''
 
 C["s_cliff"] = r'''prose(f"""
@@ -227,7 +238,7 @@ _lines = alt.Chart(_c).mark_line(strokeWidth=2.2, interpolate="step-after").enco
     color=alt.Color("day:N", sort=list(PERIOD_LABEL.values()), scale=alt.Scale(range=["#1c7ed6", "#adb5bd"])),
     strokeDash=alt.StrokeDash("day:N", sort=list(PERIOD_LABEL.values()), legend=None, scale=alt.Scale(range=[[1, 0], [4, 3]])),
     tooltip=[alt.Tooltip("time_pt:T", format="%-I:%M %p", title="PT"), "day:N", alt.Tooltip("n:Q", title="takeoffs")])
-cliff_chart = with_events(alt.layer(_band, _lines, _gap_txt)).properties(
+cliff_chart = with_events(alt.layer(_band, _lines, _gap_txt), hi=_hi).properties(
     width="container", height=280,
     title=alt.Title("Airline takeoffs stopped before the ground stop was declared",
                     subtitle="Airline takeoffs per minute across the U.S., Pacific time · blue: Nov. 13 · dashed grey: Nov. 12"))
@@ -261,7 +272,7 @@ for _name in ["West", "Mountain", "Central", "East"]:
                                   scale=alt.Scale(range=[[1, 0], [4, 3]])),
         tooltip=["day:N", alt.Tooltip("time_pt:T", format="%-I:%M %p"), "n:Q"])
     _rules = [alt.Chart(pd.DataFrame([e])).mark_rule(color=e["color"], strokeDash=[5, 3]).encode(x="t:T")
-              for e in EVENTS.to_dict("records")]
+              for e in EVENTS.to_dict("records") if e["t"] <= to_pt(pd.Series([_hi])).iloc[0]]
     _panels.append(alt.layer(_p, *_rules).properties(width=205, height=150, title=alt.Title(
         _name, subtitle=f"collapse {fmt_pt(ZONE_COLLAPSE[_name])}" if ZONE_COLLAPSE[_name] else "", fontSize=13)))
 zones_chart = alt.hconcat(*_panels).resolve_scale(y="independent").properties(
@@ -313,11 +324,11 @@ under 5,000 feet, which is mostly small private planes and helicopters.
 
 C["s_who"] = r'''_cat = ", ".join(f"{k.lower()} {v}%" for k, v in sorted(CAT_NOW.items(), key=lambda kv: -kv[1]))
 prose(f"""
-## Who is still flying
+## Who kept flying
 
-Airline traffic fell furthest, and the mix of what remains aloft shows it. At {fmt_pt(T_END)} Pacific, compared
-with the same time a day earlier, airborne traffic by category stood at: {_cat}. Helicopters (police, medical, news)
-and small private planes make up a growing share of what is still flying.
+Airline traffic fell furthest, and the mix of what stayed aloft shows it. At the low point, {fmt_pt(AIR_MIN_T)} Pacific,
+compared with the same time a day earlier, airborne traffic by category stood at: {_cat}. Helicopters (police,
+medical, news) and small private planes made up a growing share of what was still flying.
 """)'''
 
 C["method"] = r'''mo.accordion({"How we did this": mo.Html(f"""<div class="er-method">
@@ -338,6 +349,8 @@ departures otherwise look like an airline spike.
 <b>Wide-body:</b> Boeing 747/767/777/787, Airbus A330/A340/A350/A380 or MD-11, the aircraft used on most long international
 routes. Some fly domestic routes too.
 <b>Wyoming:</b> the state's borders are lines of latitude and longitude, so a box is its exact outline.
+<b>Recovery time:</b> the first minute, from half an hour before the lift, after which airline takeoffs run at
+at least twice the ground-stop rate for 20 minutes straight.
 <b>Collapse time:</b> the first minute after 11 a.m. Pacific when airline takeoffs over the next three minutes average less
 than 40% of the preceding half hour's rate. The same test is applied to each region.
 <b>Into U.S. airspace:</b> a departure from Canada or Mexico whose aircraft appears over the U.S. within four hours. This
@@ -355,7 +368,9 @@ only "Friday afternoon", and we could not find an official FAA timeline.</p>
 <a href="https://www.cnn.com/2026/11/13/us/live-news/flights-ground-stop-faa">CNN</a> ·
 <a href="https://www.news9.com/oklahoma-city-news/faa-reportedly-issues-nationwide-ground-stop">News9</a> ·
 <a href="https://www.nytimes.com/live/2026/11/13/us/ground-stop-nationwide-flights-faa">The New York Times</a> ·
-<a href="https://globalnews.ca/news/12150274/faa-usa-ground-stop-order/">Global News</a></p>
+<a href="https://globalnews.ca/news/12150274/faa-usa-ground-stop-order/">Global News</a> ·
+<a href="https://www.aljazeera.com/news/2026/11/13/us-grounds-all-flights-after-communication-issue">Al Jazeera</a> ·
+<a href="https://www.nbcwashington.com/news/national-international/faa-ground-stop-nationwide-us-airports/4182917/">NBC Washington</a></p>
 </div>""")})'''
 
 C["s_end"] = r'''mo.vstack([mo.md("---"), prose("""
@@ -414,10 +429,11 @@ def rate_stats(d, hi):
     return out
 
 
-REGION_STATS = {r: rate_stats(_tk_all[_tk_all.region == r], T_END - 900) for r in ["Lower 48", "Alaska", "Hawaii"]}
+STOP_END = min(T_END - 900, LIFT_T)                # compare the ground-stop window only
+REGION_STATS = {r: rate_stats(_tk_all[_tk_all.region == r], STOP_END) for r in ["Lower 48", "Alaska", "Hawaii"]}
 
 # Canada / Mexico: did the aircraft enter US airspace within 4 hours of takeoff?
-NB_END = T_END - 3600                      # leave an hour for late departures to reach the border
+NB_END = min(T_END - 3600, LIFT_T)           # ground-stop window; leave time for departures to reach the border
 _nb = _tk_all[_tk_all.country.isin(["Canada", "Mexico"])]
 _us_pos = snap.loc[snap.country == "US", ["hex", "minute"]]
 _f = _nb[["hex", "minute"]].merge(_us_pos, on="hex", suffixes=("", "_us"))
@@ -432,7 +448,7 @@ prose(f'''
 ## Two states kept flying
 
 Alaska Airlines said in a statement that flights within Alaska and inter-island flights in Hawaii were not affected
-by the ground stop, [The New York Times reported]({NYT_AK}). The tracking data agrees. After {fmt_pt(COLLAPSE_T)},
+by the ground stop, [The New York Times reported]({NYT_AK}). The tracking data agrees. Between {fmt_pt(COLLAPSE_T)} and the lift,
 airline departures in **Alaska ran at {_r["Alaska"]["pct"]}%** of the previous day's level for the same hours and
 **Hawaii at {_r["Hawaii"]["pct"]}%**. In the lower 48 states the figure was **{_r["Lower 48"]["pct"]}%**.
 
@@ -460,7 +476,7 @@ for _name in ["Lower 48", "Alaska", "Hawaii"]:
               for e in EVENTS.to_dict("records")]
     _pct = REGION_STATS[_name]["pct"]
     _panels.append(alt.layer(_p, *_rules).properties(width=280, height=170, title=alt.Title(
-        _name, subtitle=f"after the collapse: {_pct}% of Nov. 12" if _pct is not None else "", fontSize=13)))
+        _name, subtitle=f"during the stop: {_pct}% of Nov. 12" if _pct is not None else "", fontSize=13)))
 states_chart = alt.hconcat(*_panels).resolve_scale(y="independent").properties(title=alt.Title(
     "Alaska and Hawaii barely noticed", subtitle="Airline departures per 30 minutes; solid = Nov. 13, dashed = Nov. 12"))
 states_chart"""
@@ -533,7 +549,7 @@ WY_MIN = int(_after.min()) if len(_after) else None
 _wide = r"^(B74|B77|B78|B76|A33|A34|A35|A38|MD11)"
 _types = aircraft.drop_duplicates("hex").set_index("hex")["type"]
 lh_tk = tk_all[(tk_all.region == "Lower 48") & tk_all.hex.map(_types).fillna("").astype(str).str.match(_wide)]
-LH_STATS = rate_stats(lh_tk, T_END - 900)
+LH_STATS = rate_stats(lh_tk, STOP_END)
 _c = COLLAPSE_T or T0
 _lh_ev = lh_tk[(lh_tk.period == "event") & (lh_tk.t >= _c)]
 _win = lambda d, lo, hi: int(((d.t >= lo) & (d.t < hi)).sum())
@@ -645,24 +661,217 @@ mo.Html(f"""
 <div class="er-hero">
   <div class="er-kicker">Flight-tracking analysis · Nov. 13, 2026</div>
   <h1 class="er-h1">{_title_svg}</h1>
-  <p class="er-dek">Departures from U.S. airports stopped almost all at once at {fmt_pt(COLLAPSE_T) if COLLAPSE_T else "midday"} Pacific,
-  {f"{GAP_MIN} minutes" if GAP_MIN else "shortly"} before the FAA's nationwide ground stop officially took effect.
-  Then the sky slowly emptied.</p>
+  <p class="er-dek">On Nov. 13, departures from U.S. airports stopped almost all at once at {fmt_pt(COLLAPSE_T) if COLLAPSE_T else "midday"} Pacific,
+  {f"{GAP_MIN} minutes" if GAP_MIN else "shortly"} before the FAA's nationwide ground stop officially took effect, and the sky
+  slowly emptied.{f" When the stop was lifted at {fmt_pt(LIFT_T)}, departures took {LAG_MIN} more minutes to restart." if LAG_MIN and LAG_MIN > 0 else (f" The stop was lifted at {fmt_pt(LIFT_T)}." if LIFTED else "")}</p>
   <div class="er-byline">Data: adsb.lol open ADS-B network · data through {fmt_pt(T_END)} PT
   · Each plane inside the title stands for aircraft in the air, from 10 a.m. (left) to the latest data (right)</div>
 </div>""")'''
 
 C["findings3"] = f'NYT_INTL = "{NYT_INTL}"\n' + C["findings3"]
 
+
+# ---------------------------------------------------------------- recovery tracker
+LIFT_SRC = "https://www.aljazeera.com/news/2026/11/13/us-grounds-all-flights-after-communication-issue"
+
+C["findings4"] = r"""# minute-by-minute US airline takeoffs, Nov. 13 and the day before
+_tk = moves[(moves.kind == "takeoff") & (moves.category == "Airline") & (moves.country == "US")]
+_idx = np.arange(T0 + 900, T_END - 900 + 1, 60)
+_pm = lambda d: d.groupby(d.t // 60 * 60).size().reindex(_idx, fill_value=0)
+rec_ev, rec_bs = _pm(_tk[_tk.period == "event"]), _pm(_tk[_tk.period == "baseline"])
+LIFTED = LIFT_T <= T_END
+_stop = rec_ev[(rec_ev.index >= (COLLAPSE_T or T0) + 900) & (rec_ev.index < min(LIFT_T, T_END))]
+STOP_RATE = float(_stop.mean()) if len(_stop) else None
+# recovery = first minute (from 30 min before the lift) after which departures run at >= 2x the ground-stop
+# rate for 20 minutes straight
+RECOVERY_T = None
+if STOP_RATE and LIFTED:
+    _fwd = rec_ev.rolling(10).mean().shift(-9)
+    for _t in rec_ev.index[rec_ev.index >= LIFT_T - 1800]:
+        if _fwd.get(_t, np.nan) >= 2 * STOP_RATE and _fwd.get(_t + 600, np.nan) >= 2 * STOP_RATE:
+            RECOVERY_T = int(_t)
+            break
+LAG_MIN = round((RECOVERY_T - LIFT_T) / 60) if RECOVERY_T else None
+_w = lambda s: s[s.index >= _idx[-1] - 1799].sum()
+DEP_NOW = (_w(rec_ev) / 30, _w(rec_bs) / 30)
+DEP_NOW_PCT = round(100 * DEP_NOW[0] / DEP_NOW[1]) if DEP_NOW[1] else None
+AIR_NOW = int(TOT_EV.get(T_END, 0))
+AIR_NOW_PCT = round(100 * AIR_NOW / TOT_BS.get(T_END, np.nan)) if TOT_BS.get(T_END) else None"""
+
+C["recovery_stats"] = r"""_stat = lambda v, l, cls="": f'<div class="er-stat"><div class="v {cls}">{v}</div><div class="l">{l}</div></div>'
+_lift_v = fmt_pt(LIFT_T).split()[0]
+mo.Html('<div class="er-stats">'
+        + _stat(_lift_v, "p.m. Pacific: FAA lifts the ground stop (8:15 p.m. Eastern)", "good")
+        + _stat(f"{DEP_NOW_PCT}%" if DEP_NOW_PCT is not None else "–",
+                f"airline departures in the last half hour of data, vs. the day before ({DEP_NOW[0]:.0f} vs {DEP_NOW[1]:.0f} a minute)")
+        + _stat(f"{AIR_NOW_PCT}%" if AIR_NOW_PCT is not None else "–",
+                f"aircraft in the air over the U.S. at {fmt_pt(T_END)}, vs. the day before ({AIR_NOW:,})")
+        + _stat(f"{AIR_MIN:,}", f"aircraft in the air at the low point, {fmt_pt(AIR_MIN_T)} (normally {AIR_MIN_BASE:,})", "hot")
+        + '</div>')"""
+
+C["s_recovery"] = r"""_rec = (f"Departures stayed at the ground-stop trickle for about **{LAG_MIN} minutes** and only began climbing at "
+        f"**{fmt_pt(RECOVERY_T)}**, the mirror image of the afternoon, when departures stopped "
+        f"{GAP_MIN} minutes before the order." if RECOVERY_T and LAG_MIN is not None and LAG_MIN > 0 else
+        f"Departures began climbing at **{fmt_pt(RECOVERY_T)}**." if RECOVERY_T else
+        "Departures have not picked up yet in the data.")
+prose(f'''
+## The recovery
+
+The FAA lifted the nationwide ground stop at 8:15 p.m. Eastern (5:15 p.m. Pacific),
+[Al Jazeera reported]({LIFT_SRC}), after about four hours and 20 minutes. The sky did not refill at once. {_rec}
+The number of aircraft in the air bottomed out at **{AIR_MIN:,}** at {fmt_pt(AIR_MIN_T)}, when about
+{AIR_MIN_BASE:,} would normally be flying.
+
+As of {fmt_pt(T_END)} Pacific, the latest data, airline departures were running at **{DEP_NOW_PCT}%** of the
+previous day's level and the number of aircraft in the air at **{AIR_NOW_PCT}%**. This page updates as new data
+comes in. The rest of the story below is how the sky emptied.
+''') if LIFTED else prose('''
+## The recovery
+
+The FAA lifted the ground stop at 5:15 p.m. Pacific. The flight data here does not reach that time yet.
+''')"""
+
+C["recovery_chart"] = r"""_r30 = lambda s: s.rolling(30, min_periods=10).sum()
+_dep = pd.DataFrame({"t": rec_ev.index, "pct": 100 * _r30(rec_ev).values / _r30(rec_bs).replace(0, np.nan).values,
+                     "series": "airline departures"})
+_te = TOT_EV[TOT_EV.index >= T0]
+_air = pd.DataFrame({"t": _te.index, "pct": 100 * _te.values / TOT_BS.reindex(_te.index).values,
+                     "series": "aircraft in the air"})
+_d = pd.concat([_dep, _air]).dropna()
+_d["time_pt"] = to_pt(_d.t)
+recovery_chart = with_events(alt.Chart(_d).mark_line(strokeWidth=2.4).encode(
+    x=alt.X("time_pt:T", title=None, axis=alt.Axis(format="%-I:%M")),
+    y=alt.Y("pct:Q", title="% of the day before", scale=alt.Scale(domain=[0, 115])),
+    color=alt.Color("series:N", sort=["airline departures", "aircraft in the air"],
+                    scale=alt.Scale(range=["#1c7ed6", "#f08c00"])),
+    tooltip=["series:N", alt.Tooltip("time_pt:T", format="%-I:%M %p"), alt.Tooltip("pct:Q", format=".0f")])).properties(
+    width="container", height=260, title=alt.Title("The day in one chart",
+                                                   subtitle="U.S. airline departures (30-minute window) and aircraft in the air, as a share of the day before; Pacific time"))
+recovery_chart"""
+
+C["s_collapse_head"] = r"""prose('''
+## How the sky emptied
+''')"""
+
+C["findings4"] = f'LIFT_SRC = "{LIFT_SRC}"\n' + C["findings4"]
+C["s_recovery"] = C["s_recovery"]
+
+
+# ---------------------------------------------------------------- three-part structure
+C["part_fn"] = r"""def part(n, title, dek):
+    return mo.Html(f'<div class="er-part"><div class="er-part-n">Part {n}</div>'
+                   f'<div class="er-part-t">{title}</div><div class="er-part-d">{dek}</div></div>')"""
+
+C["summary_stats"] = r"""_stat = lambda v, l, cls="": f'<div class="er-stat"><div class="v {cls}">{v}</div><div class="l">{l}</div></div>'
+mo.Html('<div class="er-stats">'
+        + _stat(fmt_pt(COLLAPSE_T).split()[0] if COLLAPSE_T else "–",
+                f"p.m. PT: airline departures collapse, {GAP_MIN} minutes before the FAA's ground stop", "warm")
+        + _stat(f"{AIR_MIN:,}", f"aircraft over the U.S. at the low point, {fmt_pt(AIR_MIN_T)} (normally {AIR_MIN_BASE:,})", "hot")
+        + (_stat(fmt_pt(LIFT_T).split()[0], f"p.m. PT: the stop is lifted; departures restart {LAG_MIN} minutes later"
+                 if LAG_MIN is not None else "p.m. PT: the stop is lifted", "good") if LIFTED else "")
+        + _stat(f"{DEP_NOW_PCT}%" if DEP_NOW_PCT is not None else "–",
+                f"of normal airline departures in the latest data ({fmt_pt(T_END)})")
+        + '</div>')"""
+
+C["s_intro"] = r"""prose(f'''
+The two lines above tell the whole story. At {fmt_pt(COLLAPSE_T)} Pacific, U.S. airline departures (blue) fell
+off a cliff. The number of aircraft in the air (orange) drained for hours as flights already aloft landed, bottoming
+out at {AIR_MIN:,} at {fmt_pt(AIR_MIN_T)}{f" After the FAA lifted the stop at {fmt_pt(LIFT_T)}, both began to climb." if LIFTED else ""}
+
+This page tells it in three parts: how the sky emptied, what kept flying when it was nearly empty, and how it came back.
+''')"""
+
+C["part1"] = r"""part(1, "The stop", "Departures halt, and the sky drains")"""
+C["part2"] = r"""part(2, "At the bottom", "What kept flying, and what didn't")"""
+C["part3"] = r"""part(3, "The return", "The ban is lifted and the sky refills")"""
+
+C["s_map2"] = r"""prose(f'''
+## Replay the day
+
+Every aircraft broadcasting its position over the U.S., one frame per minute, from 10 a.m. to {fmt_pt(T_END)} Pacific.
+The map opens at the low point. Drag the slider back to {fmt_pt(COLLAPSE_T)} to watch departures stop,
+{f"to {fmt_pt(WY_ZERO_T)} to see Wyoming empty, " if WY_ZERO_T else ""}{f"and past {fmt_pt(LIFT_T)} to watch the sky refill" if LIFTED else ""}.
+Aircraft are colored by altitude; grey ones are on the ground with transponders on. Canadian and Mexican traffic is
+faded. Hover over a plane for its callsign and type.
+''')"""
+
+C["s_recovery2"] = r"""_rec = (f"Departures stayed at the ground-stop trickle for about **{LAG_MIN} minutes** and only began climbing at "
+        f"**{fmt_pt(RECOVERY_T)}**, the mirror image of the afternoon, when departures stopped "
+        f"{GAP_MIN} minutes before the order." if RECOVERY_T and LAG_MIN is not None and LAG_MIN > 0 else
+        f"Departures began climbing at **{fmt_pt(RECOVERY_T)}**." if RECOVERY_T else
+        "Departures have not picked up yet in the data.")
+_zname = {"East": "the East", "West": "the West", "Central": "the central states", "Mountain": "the mountain states"}
+_zr = sorted([(t, _zname[z]) for z, t in ZONE_RECOVERY.items() if t], key=lambda x: x[0])
+_zone_txt = ""
+if _zr:
+    _first_t, _first = _zr[0]
+    _zone_txt = (
+        f"{_first[0].upper() + _first[1:]} came back first, at {fmt_pt(_first_t)}"
+        + (f", {round((LIFT_T - _first_t) / 60)} minutes before the lift was announced" if _first_t < LIFT_T else "")
+        + (f"; {EAST_WB[0]} of its first {EAST_WB[1]} airline departures were wide-bodies, the jets used on long international routes"
+           if _first == "the East" and EAST_WB[1] else "") + ". "
+        + ("Then " + ", ".join(f"{z} ({fmt_pt(t)})" for t, z in _zr[1:-1])
+           + (" and " if len(_zr) > 2 else "") + f"{_zr[-1][1]} ({fmt_pt(_zr[-1][0])})." if len(_zr) > 1 else ""))
+prose(f'''
+## The lift
+
+The FAA lifted the nationwide ground stop at 8:15 p.m. Eastern (5:15 p.m. Pacific),
+[Al Jazeera reported]({LIFT_SRC}), after about four hours and 20 minutes. The sky did not refill at once. {_rec}
+
+{_zone_txt}
+
+By {fmt_pt(T_END)} Pacific, the latest data, airline departures were running at **{DEP_NOW_PCT}%** of the previous
+day's level and the number of aircraft in the air at **{AIR_NOW_PCT}%**. Airlines warned that delays and cancellations
+would continue as they got aircraft and crews back into position.
+''') if LIFTED else prose('''
+## The lift
+
+The FAA lifted the ground stop at 5:15 p.m. Pacific. The flight data here does not reach that time yet.
+''')"""
+
+C["restart_chart"] = r"""_lo, _hi = LIFT_T - 45 * 60, min(T_END - 900, LIFT_T + 100 * 60)
+_sm = lambda s: s.rolling(5, center=True, min_periods=3).mean()       # 5-minute average smooths feed gaps
+_c = pd.concat([_sm(rec_ev).rename("n").to_frame().assign(day=PERIOD_LABEL["event"]),
+                _sm(rec_bs).rename("n").to_frame().assign(day=PERIOD_LABEL["baseline"])]).rename_axis("t").reset_index()
+_c = _c[(_c.t >= _lo) & (_c.t <= _hi)]
+_c["time_pt"] = to_pt(_c.t)
+_layers = []
+if RECOVERY_T and RECOVERY_T > LIFT_T:
+    _gap = pd.DataFrame([{"a": LIFT, "b": dt.datetime.fromtimestamp(RECOVERY_T, PT).replace(tzinfo=None),
+                          "label": f"{LAG_MIN}-minute lag"}])
+    _layers += [alt.Chart(_gap).mark_rect(color="#2f9e44", opacity=0.10).encode(x="a:T", x2="b:T"),
+                alt.Chart(_gap.assign(mid=_gap.a + (_gap.b - _gap.a) / 2)).mark_text(
+                    color="#2f9e44", fontSize=12, fontWeight="bold", baseline="bottom").encode(x="mid:T", y=alt.value(40), text="label:N")]
+_lines = alt.Chart(_c).mark_line(strokeWidth=2.2, interpolate="monotone").encode(
+    x=alt.X("time_pt:T", title=None, axis=alt.Axis(format="%-I:%M")),
+    y=alt.Y("n:Q", title="airline takeoffs per minute (5-min avg)"),
+    color=alt.Color("day:N", sort=list(PERIOD_LABEL.values()), scale=alt.Scale(range=["#1c7ed6", "#adb5bd"])),
+    strokeDash=alt.StrokeDash("day:N", sort=list(PERIOD_LABEL.values()), legend=None, scale=alt.Scale(range=[[1, 0], [4, 3]])),
+    tooltip=[alt.Tooltip("time_pt:T", format="%-I:%M %p", title="PT"), "day:N", alt.Tooltip("n:Q", title="takeoffs/min", format=".1f")])
+restart_chart = with_events(alt.layer(*_layers, _lines), lo=_lo, hi=_hi).properties(
+    width="container", height=260,
+    title=alt.Title("Departures restarted after the lift, not with it",
+                    subtitle="Airline takeoffs per minute across the U.S. (5-minute average), Pacific time · blue: Nov. 13 · dashed grey: Nov. 12"))
+restart_chart"""
+
+
+C["findings4"] += '\n\n# restart time by longitude band (same test, per region)\n_ztk = _tk[_tk.region == "Lower 48"]\n_zones = pd.cut(_ztk.lon, [-180, -115, -102, -87, -60], labels=["West", "Mountain", "Central", "East"])\nZONE_RECOVERY = {}\nfor _z in ["West", "Mountain", "Central", "East"]:\n    _s = _pm(_ztk[(_ztk.period == "event") & (_zones == _z)])\n    _sr = _s[(_s.index >= (COLLAPSE_T or T0) + 900) & (_s.index < min(LIFT_T, T_END))].mean()\n    _thr = max(2 * _sr, 0.5)\n    _f = _s.rolling(10).mean().shift(-9)\n    ZONE_RECOVERY[_z] = next((int(_t) for _t in _s.index[_s.index >= LIFT_T - 1800]\n                              if _f.get(_t, np.nan) >= _thr and _f.get(_t + 600, np.nan) >= _thr), None) if LIFTED else None\n# wide-body share of the East\'s first 20 minutes of restarted departures\n_et = ZONE_RECOVERY.get("East")\n_types = aircraft.drop_duplicates("hex").set_index("hex")["type"]\n_first = _ztk[(_ztk.period == "event") & (_zones == "East") & (_ztk.t >= (_et or 0)) & (_ztk.t < (_et or 0) + 1200)] if _et else _ztk.iloc[:0]\nEAST_WB = (int(_first.hex.map(_types).fillna("").astype(str).str.match(r"^(B74|B77|B78|B76|A33|A34|A35|A38|MD11)").sum()), len(_first))'
+
 for _k, _needle in [("config", "GROUND_STOP_T"), ("helpers", '"lat", "lon"]].assign'), ("config", "CATS ="),
                     ("config", 'Fetch newest data'), ("load", "Fetching the latest")]:
     assert _needle in C[_k], (_k, _needle)
 assert "EVENTS = pd.DataFrame" not in C["config"]
 
-ORDER = ["style", "header", "load", "stats", "lede", "s_cliff", "cliff_chart", "s_where", "zones_chart", "hubs_chart", "s_states", "states_chart", "s_intl", "intl_chart", "s_neighbors", "neighbors_chart",
-         "s_map", "map_controls", "map", "s_wyoming", "wy_chart", "s_landings", "airborne_chart", "moves_chart", "s_alt", "alt_chart",
-         "s_who", "category_chart", "method", "s_end", "config",
-         "imports", "derive", "findings", "findings2", "findings3", "export", "events_fn", "widget", "helpers", "assets"]
+ORDER = ["style", "header", "load", "summary_stats", "recovery_chart", "s_intro",
+         "part1", "lede", "s_cliff", "cliff_chart", "s_where", "zones_chart", "hubs_chart",
+         "s_landings", "airborne_chart", "moves_chart", "s_alt", "alt_chart", "s_wyoming", "wy_chart",
+         "s_map2", "map_controls", "map",
+         "part2", "s_who", "category_chart", "s_states", "states_chart", "s_intl", "intl_chart",
+         "s_neighbors", "neighbors_chart",
+         "part3", "s_recovery2", "restart_chart",
+         "method", "s_end", "config",
+         "imports", "part_fn", "derive", "findings", "findings2", "findings3", "findings4", "export",
+         "events_fn", "widget", "helpers", "assets"]
 
 async with cm.get_context(skip_staleness_check=True) as ctx:
     cells = [c.id for c in ctx.cells]

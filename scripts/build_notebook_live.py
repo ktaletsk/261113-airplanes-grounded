@@ -450,10 +450,14 @@ mo.vstack([
     mo.Html(f'<div class="er-databar-note">{mo.callout(mo.md(NOTICE), kind="warn").text}</div>') if NOTICE else mo.md(""),
 ])'''
 
-C["events_fn"] = r'''def with_events(chart):
-    """Layer the EVENTS markers (dashed rule + label) on a chart whose x is time_pt."""
+C["events_fn"] = r'''def with_events(chart, lo=None, hi=None):
+    """Layer the EVENTS markers (dashed rule + label) on a chart whose x is time_pt; lo/hi (unix) limit which show."""
     layers = [chart]
+    _lo = dt.datetime.fromtimestamp(lo, PT).replace(tzinfo=None) if lo else None
+    _hi = dt.datetime.fromtimestamp(hi, PT).replace(tzinfo=None) if hi else None
     for e in EVENTS.to_dict("records"):
+        if (_lo and e["t"] < _lo) or (_hi and e["t"] > _hi):
+            continue
         _d = pd.DataFrame([e])
         layers.append(alt.Chart(_d).mark_rule(color=e["color"], strokeWidth=1.5, strokeDash=[5, 3]).encode(x="t:T"))
         layers.append(alt.Chart(_d).mark_text(color=e["color"], align=e["align"], baseline="top", fontSize=11, fontWeight="bold")
@@ -532,7 +536,8 @@ def make_flightmap(period, cats):
             "us": (g.country.values == "US").astype(int).tolist(),
         }
     w.observe(send, names=["minute"])
-    w.minute = int(mins[-1]) if period == "event" else int(mins[0])
+    _start = AIR_MIN_T - (BASELINE_SHIFT if period == "baseline" else 0)
+    w.minute = int(min(mins, key=lambda m: abs(m - _start)))
     send()
     return w'''
 
