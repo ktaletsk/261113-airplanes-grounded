@@ -173,7 +173,8 @@ def categorize(callsign, desc, wtc):
     cat[jet & w.eq("L")] = "Business jet"
     cat[jet & w.isin(["M", "H", "J"])] = "Airline"
     bizjet_ops = r"^(EJA|LXJ|XOJ|JTL|FFL|TWY|PCM|SVW|EJM|JRE|VJA|GPD|PRD|CNS|KOW|NJE)\d"
-    cat[cs.str.match(AIRLINE_CS) & ~cs.str.match(bizjet_ops) & ~d.str[0].eq("H")] = "Airline"
+    # airline-style callsign on a jet or turboprop (flight schools fly pistons under operator codes)
+    cat[cs.str.match(AIRLINE_CS) & ~cs.str.match(bizjet_ops) & ~d.str[0].eq("H") & ~d.str[2].eq("P")] = "Airline"
     return cat
 
 

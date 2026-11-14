@@ -39,6 +39,7 @@ HUBS = {  # major US airports (lat, lon) for the hub comparison
     "Seattle (SEA)": (47.45, -122.31), "Houston (IAH)": (29.98, -95.34), "Newark (EWR)": (40.69, -74.17),
     "New York (JFK, LGA)": (40.64, -73.78), "San Francisco (SFO)": (37.62, -122.38), "Miami (MIA)": (25.79, -80.29),
     "Minneapolis (MSP)": (44.88, -93.22), "Detroit (DTW)": (42.21, -83.35), "Boston (BOS)": (42.36, -71.01),
+    "Washington Dulles (IAD)": (38.95, -77.46), "Philadelphia (PHL)": (39.87, -75.24),
 }
 ''')
 
@@ -148,6 +149,8 @@ mo.Html("""
   .er-prose a { color: inherit; text-decoration-thickness: 1px; text-underline-offset: 3px; }
   .er-hero { padding: 28px 0 8px; }
   .er-kicker { font: 700 12px Inter, sans-serif; letter-spacing: .16em; text-transform: uppercase; color: #e03131; }
+  .er-h1 { margin: 6px 0 14px; line-height: 0; }
+  .er-title { width: 100%; height: auto; display: block; overflow: visible; }
   .er-hero h1 { font-family: 'Source Serif 4', Georgia, serif; font-weight: 800; font-size: clamp(44px, 7vw, 76px);
                 line-height: 1.0; letter-spacing: -.02em; margin: 10px 0 14px; }
   .er-dek { font-family: 'Source Serif 4', Georgia, serif; font-size: 23px; line-height: 1.4; opacity: .85; margin: 0 0 18px; }
@@ -169,16 +172,6 @@ mo.Html("""
 </style>
 """)'''
 
-C["header"] = r'''mo.Html(f"""
-<div class="er-hero">
-  <div class="er-kicker">Flight-tracking analysis · Nov. 13, 2026</div>
-  <h1>Empty skies</h1>
-  <p class="er-dek">Departures from U.S. airports stopped almost all at once at {fmt_pt(COLLAPSE_T) if COLLAPSE_T else "midday"} Pacific,
-  {f"{GAP_MIN} minutes" if GAP_MIN else "shortly"} before the FAA's nationwide ground stop officially took effect.
-  Then the sky slowly emptied.</p>
-  <div class="er-byline">Data: adsb.lol open ADS-B network · data through
-  {fmt_pt(T_END)} PT</div>
-</div>""")'''
 
 C["stats"] = r'''_stat = lambda v, l, cls="": f'<div class="er-stat"><div class="v {cls}">{v}</div><div class="l">{l}</div></div>'
 mo.Html('<div class="er-stats">'
@@ -209,8 +202,8 @@ C["s_cliff"] = r'''prose(f"""
 ## The cliff came first
 
 Counting airline takeoffs minute by minute makes the timing plain. The rate did not taper off as you might expect if
-airlines were holding flights at the gate one by one. It fell off a cliff, from the high 30s per minute to single
-digits, between {fmt_pt(COLLAPSE_T)} and {fmt_pt(COLLAPSE_T + 120)}. The official ground-stop time comes
+airlines were holding flights at the gate one by one. It fell off a cliff, from about {BEFORE_RATE:.0f} a minute to {AFTER_RATE:.0f},
+between {fmt_pt(COLLAPSE_T)} and {fmt_pt(COLLAPSE_T + 120)}. The official ground-stop time comes
 {GAP_MIN} minutes later, in the shaded gap below.
 
 Early reports cited the 2:54 p.m. Central time. The data suggests departures were already being held in practice
@@ -297,6 +290,7 @@ C["s_map"] = r'''prose("""
 Every aircraft broadcasting its position over the U.S., one frame per minute. Press play, or drag the slider back to
 late morning to see an ordinary Friday. Aircraft are colored by altitude; grey ones are on the ground with transponders
 on. Canadian and Mexican traffic is shown faded. Hover over a plane for its callsign and type.
+{f"Drag the slider to {fmt_pt(WY_ZERO_T)} and look at Wyoming." if WY_ZERO_T else ""}
 """)'''
 
 C["s_landings"] = r'''prose(f"""
@@ -337,8 +331,13 @@ on Nov. 12. Aircraft types come from the
 <a href="https://github.com/wiedehopf/tar1090-db">tar1090 aircraft database</a>.</p>
 <h3>Definitions</h3>
 <p><b>Takeoff:</b> an aircraft's track goes from on the ground to airborne, or a track first appears in the air below 2,500 feet.
-<b>Airline:</b> an airline-style callsign (three-letter operator code plus flight number) or a medium or heavy jet. This
-includes regional and cargo carriers, and a few flight schools that use operator codes.
+<b>Airline:</b> an airline-style callsign (three-letter operator code plus flight number) on a jet or turboprop, or any
+medium or heavy jet. This includes regional and cargo carriers. Piston aircraft are excluded even with an operator
+code: flight schools such as the University of North Dakota fly under such codes, and their top-of-the-hour training
+departures otherwise look like an airline spike.
+<b>Wide-body:</b> Boeing 747/767/777/787, Airbus A330/A340/A350/A380 or MD-11, the aircraft used on most long international
+routes. Some fly domestic routes too.
+<b>Wyoming:</b> the state's borders are lines of latitude and longitude, so a box is its exact outline.
 <b>Collapse time:</b> the first minute after 11 a.m. Pacific when airline takeoffs over the next three minutes average less
 than 40% of the preceding half hour's rate. The same test is applied to each region.
 <b>Into U.S. airspace:</b> a departure from Canada or Mexico whose aircraft appears over the U.S. within four hours. This
@@ -408,14 +407,14 @@ def _rate(d, lo, hi):
     return len(d[(d.t >= lo) & (d.t < hi)]) / max(1e-9, (hi - lo) / 1800)
 
 
-def _stats(d, hi):
+def rate_stats(d, hi):
     ev, bs = d[d.period == "event"], d[d.period == "baseline"]
     out = {"before": _rate(ev, _c - 3600, _c), "after": _rate(ev, _c + 120, hi), "base_after": _rate(bs, _c + 120, hi)}
     out["pct"] = round(100 * out["after"] / out["base_after"]) if out["base_after"] else None
     return out
 
 
-REGION_STATS = {r: _stats(_tk_all[_tk_all.region == r], T_END - 900) for r in ["Lower 48", "Alaska", "Hawaii"]}
+REGION_STATS = {r: rate_stats(_tk_all[_tk_all.region == r], T_END - 900) for r in ["Lower 48", "Alaska", "Hawaii"]}
 
 # Canada / Mexico: did the aircraft enter US airspace within 4 hours of takeoff?
 NB_END = T_END - 3600                      # leave an hour for late departures to reach the border
@@ -424,7 +423,7 @@ _us_pos = snap.loc[snap.country == "US", ["hex", "minute"]]
 _f = _nb[["hex", "minute"]].merge(_us_pos, on="hex", suffixes=("", "_us"))
 _f = _f[(_f.minute_us > _f.minute) & (_f.minute_us <= _f.minute + 4 * 3600)]
 nb_tk = _nb.assign(to_us=_nb.set_index(["hex", "minute"]).index.isin(pd.MultiIndex.from_frame(_f[["hex", "minute"]])))
-NEIGHBOR_STATS = {(c, u): _stats(nb_tk[(nb_tk.country == c) & (nb_tk.to_us == u)], NB_END)
+NEIGHBOR_STATS = {(c, u): rate_stats(nb_tk[(nb_tk.country == c) & (nb_tk.to_us == u)], NB_END)
                   for c in ["Canada", "Mexico"] for u in [True, False]}
 tk_all = _tk_all"""
 
@@ -513,15 +512,157 @@ neighbors_chart"""
 C["findings2"] = f'NYT_AK = "{NYT_AK}"\nNYT_LIVE = "{NYT_LIVE}"\nGLOBAL_NEWS = "{GLOBAL_NEWS}"\n' + C["findings2"]
 assert "country_grid" in C["helpers"] and '"us": (g.country' in C["widget"]
 
+
+# ---------------------------------------------------------------- Wyoming moment + long-haul departures
+NYT_INTL = "https://www.nytimes.com/live/2026/11/13/us/ground-stop-nationwide-flights-faa/1f19bdff-736c-5ab5-bceb-19df5ab3be0e"
+
+C["findings3"] = r"""# Wyoming is a lat/lon rectangle, so a box is its exact border
+_wy = snap[(snap.alt_ft >= 0) & snap.lat.between(41.0, 45.0) & snap.lon.between(-111.056, -104.052)]
+_wn = _wy.groupby(["period", "t"]).size()
+_grid = {p: np.sort(snap.loc[snap.period == p, "t"].unique()) for p in PERIODS}
+wy_series = {p: (_wn[p] if p in _wn.index.get_level_values(0) else pd.Series(dtype=int)).reindex(_grid[p], fill_value=0)
+             for p in PERIODS}
+_ev = wy_series["event"]
+_after = _ev[_ev.index >= (COLLAPSE_T or T0)]
+WY_ZERO_T = int(_after.index[_after.values == 0][0]) if (_after.values == 0).any() else None
+WY_NOON = int(_ev.get(T0 + 7200, 0))
+WY_BASE_AT = int(wy_series["baseline"].asof(WY_ZERO_T)) if WY_ZERO_T else None
+WY_MIN = int(_after.min()) if len(_after) else None
+
+# long-haul (wide-body) airline departures from the lower 48
+_wide = r"^(B74|B77|B78|B76|A33|A34|A35|A38|MD11)"
+_types = aircraft.drop_duplicates("hex").set_index("hex")["type"]
+lh_tk = tk_all[(tk_all.region == "Lower 48") & tk_all.hex.map(_types).fillna("").astype(str).str.match(_wide)]
+LH_STATS = rate_stats(lh_tk, T_END - 900)
+_c = COLLAPSE_T or T0
+_lh_ev = lh_tk[(lh_tk.period == "event") & (lh_tk.t >= _c)]
+_win = lambda d, lo, hi: int(((d.t >= lo) & (d.t < hi)).sum())
+LH_FIRST_HOUR = (_win(_lh_ev, _c, _c + 3600), _win(lh_tk[lh_tk.period == "baseline"], _c, _c + 3600))
+LH_LAST_HOUR = (_win(_lh_ev, T_END - 900 - 3600, T_END - 900),
+                _win(lh_tk[lh_tk.period == "baseline"], T_END - 900 - 3600, T_END - 900))
+LH_TOTAL = int(((_lh_ev.t >= _c + 120) & (_lh_ev.t <= T_END - 900)).sum())
+_bins = _lh_ev.assign(b=_lh_ev.t // 1800 * 1800).groupby("b").size()
+_bb = lh_tk[lh_tk.period == "baseline"].assign(b=lambda d: d.t // 1800 * 1800).groupby("b").size()
+_res = [b for b in _bins.index if b > _c and _bb.get(b, 0) >= 5 and _bins[b] >= 0.5 * _bb.get(b, 0)]
+LH_RESUME_T = int(_res[0]) if _res else None
+_hn = list(HUBS); _hl = np.array([HUBS[h] for h in _hn])
+_lp = _lh_ev[_lh_ev.t >= (LH_RESUME_T or _c)]
+_d = np.hypot(_lp.lat.values[:, None] - _hl[:, 0], (_lp.lon.values[:, None] - _hl[:, 1]) * np.cos(np.radians(_hl[:, 0])))
+_apt = pd.Series(np.where(_d.min(axis=1) < 0.3, np.array(_hn)[_d.argmin(axis=1)], None)).dropna()
+LH_AIRPORTS = [a.split(" (")[0] if "(" in a else a for a in _apt.value_counts().head(5).index]"""
+
+C["s_wyoming"] = r"""prose(f'''
+## An empty state
+
+One moment on the map sums it up. At **{fmt_pt(WY_ZERO_T)} Pacific**, not a single aircraft was visible in the sky
+over Wyoming. At noon there had been {WY_NOON}. At the same time a day earlier there were {WY_BASE_AT}.
+Receiver coverage is thin at low altitude over the rural West, so a small plane flying low could be missed. The jets
+at cruise altitude that normally cross the state all day are hard to miss.
+''') if WY_ZERO_T else prose(f'''
+## An emptying state
+
+Over Wyoming, the number of aircraft in the air fell from {WY_NOON} at noon to as few as {WY_MIN}.
+''')"""
+
+C["wy_chart"] = r"""_d = pd.concat([wy_series[p].rename("n").to_frame().assign(day=PERIOD_LABEL[p]) for p in PERIODS]).rename_axis("t").reset_index()
+_d = _d[(_d.t >= T0) & (_d.t <= T_END)]
+_d["time_pt"] = to_pt(_d.t)
+_line = alt.Chart(_d).mark_line(strokeWidth=2, interpolate="step-after").encode(
+    x=alt.X("time_pt:T", title=None, axis=alt.Axis(format="%-I:%M")),
+    y=alt.Y("n:Q", title="aircraft airborne over Wyoming"),
+    color=alt.Color("day:N", sort=list(PERIOD_LABEL.values()), legend=None, scale=alt.Scale(range=["#1c7ed6", "#adb5bd"])),
+    strokeDash=alt.StrokeDash("day:N", sort=list(PERIOD_LABEL.values()), legend=None, scale=alt.Scale(range=[[1, 0], [4, 3]])),
+    tooltip=["day:N", alt.Tooltip("time_pt:T", format="%-I:%M %p"), "n:Q"])
+_layers = [_line]
+if WY_ZERO_T:
+    _z = pd.DataFrame([{"time_pt": to_pt(pd.Series([WY_ZERO_T])).iloc[0], "n": 0, "label": f"0 aircraft at {fmt_pt(WY_ZERO_T)}"}])
+    _layers += [alt.Chart(_z).mark_point(size=90, filled=True, color="#e03131").encode(x="time_pt:T", y="n:Q"),
+                alt.Chart(_z).mark_text(align="right", dx=-6, dy=-34, color="#e03131", fontWeight="bold").encode(
+                    x="time_pt:T", y="n:Q", text="label:N")]
+wy_chart = with_events(alt.layer(*_layers)).properties(width="container", height=220, title=alt.Title(
+    "Wyoming's sky, emptied", subtitle="Aircraft airborne over Wyoming; solid = Nov. 13, dashed = Nov. 12"))
+wy_chart"""
+
+C["s_intl"] = r"""_lh_pct = LH_STATS["pct"]
+_wb = lambda n: f"{n} wide-body" if n == 1 else f"{n} wide-bodies"
+_share = round(100 * LH_LAST_HOUR[0] / LH_LAST_HOUR[1]) if LH_LAST_HOUR[1] else None
+_share_txt = ("about the usual number" if _share is not None and _share >= 85 else
+              f"about {_share}% of the {LH_LAST_HOUR[1]} that left the day before" if _share is not None else "")
+_apts = ", ".join(LH_AIRPORTS[:-1]) + (f" and {LH_AIRPORTS[-1]}" if len(LH_AIRPORTS) > 1 else "".join(LH_AIRPORTS))
+prose(f'''
+## Long-haul flights got out
+
+The halt was not total. Some international flights were departing U.S. airports, including Honolulu and San
+Francisco for Asia, and several left Kennedy for Europe, [The New York Times reported]({NYT_INTL}). The FAA had not
+said which international flights were cleared to go.
+
+The data shows them clearly in the wide-body jets that fly long international routes. In the hour after the collapse,
+just **{_wb(LH_FIRST_HOUR[0])}** left mainland airports, against {LH_FIRST_HOUR[1]} the day before. Then they started
+coming back{f": from about **{fmt_pt(LH_RESUME_T)}** Pacific," if LH_RESUME_T else ","} the evening bank of flights to
+Europe and Asia began to leave. In the latest hour of data, **{LH_LAST_HOUR[0]}** departed, {_share_txt},
+led by {_apts}. Since the collapse, {_wb(LH_TOTAL)} have left the lower 48.
+''')"""
+
+C["intl_chart"] = r"""_bins = np.arange(T0, (T_END - 900) // 1800 * 1800, 1800)
+_d = (lh_tk.assign(b=lh_tk.t // 1800 * 1800).groupby(["b", "period"]).size()
+      .reindex(pd.MultiIndex.from_product([_bins, PERIODS], names=["b", "period"]), fill_value=0).rename("n").reset_index())
+_d["time_pt"] = to_pt(_d.b + 900)
+_d["day"] = _d.period.map(PERIOD_LABEL)
+intl_chart = with_events(alt.Chart(_d).mark_line(strokeWidth=2.2, point=alt.OverlayMarkDef(size=20)).encode(
+    x=alt.X("time_pt:T", title=None, axis=alt.Axis(format="%-I:%M")),
+    y=alt.Y("n:Q", title="wide-body departures / 30 min"),
+    color=alt.Color("day:N", sort=list(PERIOD_LABEL.values()), legend=None, scale=alt.Scale(range=["#1c7ed6", "#adb5bd"])),
+    strokeDash=alt.StrokeDash("day:N", sort=list(PERIOD_LABEL.values()), legend=None, scale=alt.Scale(range=[[1, 0], [4, 3]])),
+    tooltip=["day:N", alt.Tooltip("time_pt:T", format="%-I:%M %p"), "n:Q"])).properties(
+    width="container", height=240, title=alt.Title("Wide-bodies dipped, then the long-haul bank left",
+                                                   subtitle="Wide-body airline departures from the lower 48 per 30 minutes; solid = Nov. 13, dashed = Nov. 12"))
+intl_chart"""
+
+C["header"] = r'''_ser = total[total.period == "event"].set_index("t").n.sort_index()
+_W, _H, _FS = 720, 118, 112
+_rng = np.random.default_rng(1113)
+_N = 2600
+_x, _y = _rng.uniform(-6, _W + 6, _N), _rng.uniform(0, _H, _N)
+_tt = T0 + np.clip(_x / _W, 0, 1) * (T_END - T0)
+_dens = np.interp(_tt, _ser.index.values, _ser.values) / max(1, _ser.max())     # airborne count, 10 a.m. -> latest
+_keep = _rng.uniform(0, 1, _N) < _dens ** 1.6
+_pal = np.array(["#56d364", "#b4e63c", "#ffd84a", "#ff9f43", "#ff5e3a"])
+_planes = "".join(
+    f'<use href="#er-pl" transform="translate({x:.1f},{y:.1f}) rotate({r:.0f}) scale(.62)" fill="{c}"/>'
+    for x, y, r, c in zip(_x[_keep], _y[_keep], _rng.uniform(0, 360, _N)[_keep], _rng.choice(_pal, _N)[_keep]))
+_txt = (f'x="0" y="{_H * 0.80:.0f}" textLength="{_W}" lengthAdjust="spacingAndGlyphs" '
+        f'style="font: 800 {_FS}px \'Source Serif 4\', Georgia, serif"')
+_title_svg = f"""<svg class="er-title" viewBox="0 0 {_W} {_H}" role="img" aria-label="Empty skies">
+  <defs>
+    <path id="er-pl" d="M0,-9 L1.4,-5 L1.4,-1.5 L8,2.5 L8,4 L1.4,2 L1,6 L3.5,8 L3.5,9 L0,8 L-3.5,9 L-3.5,8 L-1,6 L-1.4,2 L-8,4 L-8,2.5 L-1.4,-1.5 L-1.4,-5 Z"/>
+    <clipPath id="er-ttl"><text {_txt}>Empty skies</text></clipPath>
+  </defs>
+  <text {_txt} fill="currentColor" fill-opacity=".06">Empty skies</text>
+  <g clip-path="url(#er-ttl)">{_planes}</g>
+  <text {_txt} fill="none" stroke="currentColor" stroke-opacity=".55" stroke-width="1.1">Empty skies</text>
+</svg>"""
+mo.Html(f"""
+<div class="er-hero">
+  <div class="er-kicker">Flight-tracking analysis · Nov. 13, 2026</div>
+  <h1 class="er-h1">{_title_svg}</h1>
+  <p class="er-dek">Departures from U.S. airports stopped almost all at once at {fmt_pt(COLLAPSE_T) if COLLAPSE_T else "midday"} Pacific,
+  {f"{GAP_MIN} minutes" if GAP_MIN else "shortly"} before the FAA's nationwide ground stop officially took effect.
+  Then the sky slowly emptied.</p>
+  <div class="er-byline">Data: adsb.lol open ADS-B network · data through {fmt_pt(T_END)} PT
+  · Each plane inside the title stands for aircraft in the air, from 10 a.m. (left) to the latest data (right)</div>
+</div>""")'''
+
+C["findings3"] = f'NYT_INTL = "{NYT_INTL}"\n' + C["findings3"]
+
 for _k, _needle in [("config", "GROUND_STOP_T"), ("helpers", '"lat", "lon"]].assign'), ("config", "CATS ="),
                     ("config", 'Fetch newest data'), ("load", "Fetching the latest")]:
     assert _needle in C[_k], (_k, _needle)
 assert "EVENTS = pd.DataFrame" not in C["config"]
 
-ORDER = ["style", "header", "load", "stats", "lede", "s_cliff", "cliff_chart", "s_where", "zones_chart", "hubs_chart", "s_states", "states_chart", "s_neighbors", "neighbors_chart",
-         "s_map", "map_controls", "map", "s_landings", "airborne_chart", "moves_chart", "s_alt", "alt_chart",
+ORDER = ["style", "header", "load", "stats", "lede", "s_cliff", "cliff_chart", "s_where", "zones_chart", "hubs_chart", "s_states", "states_chart", "s_intl", "intl_chart", "s_neighbors", "neighbors_chart",
+         "s_map", "map_controls", "map", "s_wyoming", "wy_chart", "s_landings", "airborne_chart", "moves_chart", "s_alt", "alt_chart",
          "s_who", "category_chart", "method", "s_end", "config",
-         "imports", "derive", "findings", "findings2", "export", "events_fn", "widget", "helpers", "assets"]
+         "imports", "derive", "findings", "findings2", "findings3", "export", "events_fn", "widget", "helpers", "assets"]
 
 async with cm.get_context(skip_staleness_check=True) as ctx:
     cells = [c.id for c in ctx.cells]
