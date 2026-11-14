@@ -7,7 +7,7 @@
 #     "altair",
 #     "anywidget",
 #     "traitlets",
-#     "tzdata==2026.6",
+#     "tzdata",
 # ]
 # ///
 
