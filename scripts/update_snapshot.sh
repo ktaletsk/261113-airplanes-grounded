@@ -1,7 +1,7 @@
 #!/bin/bash
-# Rebuild the published data snapshot (public/bundle.npz) from the newest adsb.lol files, and the session
-# file that gives the static molab preview its outputs. Run this from a normal home/office connection:
-# adsb.lol blocks many cloud networks (including GitHub Actions runners).
+# Rebuild the published data snapshot (public/bundle.npz) from adsb.lol's daily archives on GitHub, and the session
+# file that gives the static molab preview its outputs.
+# Data comes only from the GitHub archives (scripts/download.sh pre-fetches them); the live adsb.lol server is never used.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 EMPTY_SKIES_EXPORT=public/bundle.npz uv run --quiet grounded.py

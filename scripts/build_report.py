@@ -73,8 +73,8 @@ def find_collapse(s, search_from, pre=30 * 60, fwd=3, frac=0.4):
 C["derive"] = C["derive"].replace('mo.md(f"Derived per-minute counts and **{len(moves):,}** takeoff/landing events.")', "")
 
 C["load"] = C["load"].replace(
-    'with mo.status.progress_bar(total=len(_jobs) + 1, title="Downloading ADS-B snapshots from adsb.lol",',
-    'with mo.status.progress_bar(total=len(_jobs) + 1, title="Fetching the latest flight-tracking data from adsb.lol",')
+    'with mo.status.progress_bar(total=len(_jobs) + 1, title="Loading ADS-B snapshots from adsb.lol\'s daily archives",',
+    'with mo.status.progress_bar(total=len(_jobs) + 1, title="Loading the flight-tracking data from adsb.lol\'s daily archives",')
 
 # ---------------------------------------------------------------- findings (all numbers in the text come from here)
 C["findings"] = r'''_tk = moves[(moves.kind == "takeoff") & (moves.country == "US")]
@@ -355,8 +355,9 @@ medical, news) and small private planes made up a growing share of what was stil
 C["method"] = r'''mo.accordion({"How we did this": mo.Html(f"""<div class="er-method">
 <h3>Data</h3>
 <p>Positions come from <a href="https://adsb.lol">adsb.lol</a>, an open, unfiltered network of volunteer ADS-B receivers.
-It publishes a snapshot of every aircraft it hears every 10 seconds, in one file per half hour, usually 30 to 60 minutes after the half hour ends.
-This page downloads those files when it runs and keeps one position per aircraft per minute. Each position is assigned to
+It records every aircraft it hears every 10 seconds, in one file per half hour, and publishes each day's files in a
+<a href="https://github.com/adsblol/globe_history_2026/releases">daily archive on GitHub</a>. This page is built from
+those archives, keeping one position per aircraft per minute. Each position is assigned to
 the U.S., Canada or Mexico using <a href="https://github.com/topojson/world-atlas">Natural Earth borders</a>, extended
 about 100 km offshore. "Over the U.S." includes Alaska and Hawaii. The page compares Nov. 13 with the same clock hours
 on Nov. 12. Aircraft types come from the
@@ -1773,7 +1774,7 @@ _sub("style", "  .er-databar {", """  .er-fig { max-width: 880px; margin: 30px a
   .er-databar {""")
 
 for _k, _needle in [("config", "GROUND_STOP_T"), ("helpers", '"lat", "lon", "cs"]].assign'), ("config", "CATS ="),
-                    ("load", "Fetching the latest")]:
+                    ("load", "Loading the flight-tracking data")]:
     assert _needle in C[_k], (_k, _needle)
 assert "EVENTS = pd.DataFrame" not in C["config"]
 
@@ -1786,7 +1787,7 @@ ORDER = ["style", "header", "load", "summary_stats", "recovery_chart", "s_intro"
          "part3", "s_recovery2", "restart_chart", "s_backlog", "backlog_chart", "s_sched", "sched_chart", "delay_chart", "s_weekend", "airline_chart", "context_head", "s_history",
          "method", "s_end", "config",
          "imports", "part_fn", "derive", "findings", "findings2", "findings3", "findings4", "findings5", "findings6", "findings7", "findings8", "export",
-         "events_fn", "widget", "helpers", "assets"]
+         "events_fn", "widget", "helpers", "archive", "assets"]
 
 async with cm.get_context(skip_staleness_check=True) as ctx:
     cells = [c.id for c in ctx.cells]

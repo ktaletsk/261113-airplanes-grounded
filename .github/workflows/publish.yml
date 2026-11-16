@@ -1,7 +1,7 @@
 name: Publish to GitHub Pages
 
 # Builds the WebAssembly version from the committed snapshot (public/bundle.npz).
-# No adsb.lol access here: it blocks GitHub's runners. Refresh the snapshot with scripts/update_snapshot.sh.
+# No data downloads here: it deploys the committed snapshot. Refresh it with scripts/update_snapshot.sh.
 on:
   push:
     branches: [main]

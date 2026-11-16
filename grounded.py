@@ -148,7 +148,6 @@ def _(
 async def _(
     ALL_PERIODS,
     BUNDLE_URL,
-    Blocked,
     LOAD_START,
     MAX_HOURS,
     NotPublished,
@@ -165,6 +164,7 @@ async def _(
     country_grid,
     country_of,
     dt,
+    ensure_archive_days,
     load_airports,
     load_airspace,
     load_bundle,
@@ -179,7 +179,7 @@ async def _(
     region_of,
     time,
 ):
-    # Default: the precomputed snapshot (public/bundle.npz) -> opens instantly, no download from adsb.lol.
+    # Default: the precomputed snapshot (public/bundle.npz) -> opens instantly, no downloads.
     # "Fetch newest data" (or EMPTY_SKIES_EXPORT, used to rebuild the snapshot) downloads and processes the raw files.
     T0 = int(WINDOW_START.timestamp())
     _fresh = bool(os.environ.get("EMPTY_SKIES_EXPORT"))
@@ -202,8 +202,9 @@ async def _(
                 _jobs += [(_p, _t - dt.timedelta(seconds=SHIFTS[_p])) for _p in ALL_PERIODS]
                 _t += dt.timedelta(minutes=30)
 
+            ensure_archive_days([_ts for _, _ts in _jobs])     # downloads only days missing from data/heatmap
             _frames, _calls, missing = [], [], []
-            with mo.status.progress_bar(total=len(_jobs) + 1, title="Fetching the latest flight-tracking data from adsb.lol",
+            with mo.status.progress_bar(total=len(_jobs) + 1, title="Loading the flight-tracking data from adsb.lol's daily archives",
                                         subtitle=f"{len(_jobs)} half-hour files (~10–25 MB each; cached after the first load)", remove_on_exit=True) as _bar:
                 with ThreadPoolExecutor(WORKERS) as _ex:
                     _futs = {_ex.submit(load_slot, _ts.isoformat()): (_p, _ts) for _p, _ts in _jobs}
@@ -242,8 +243,8 @@ async def _(
             if not _frames:
                 raise NotPublished("no half-hour files could be downloaded")
             DATA_SOURCE = "live"
-        except (Blocked, NotPublished) as _e:
-            NOTICE = f"Could not fetch new data from adsb.lol, so this shows the published snapshot instead. adsb.lol said: {_e}"
+        except NotPublished as _e:
+            NOTICE = f"Some of the archived data could not be loaded ({_e}), so this shows the published snapshot instead."
             snap, aircraft, PRE, _meta = read_bundle()
 
     if DATA_SOURCE == "live":
@@ -1502,8 +1503,9 @@ def _(mo):
     mo.accordion({"How we did this": mo.Html(f"""<div class="er-method">
     <h3>Data</h3>
     <p>Positions come from <a href="https://adsb.lol">adsb.lol</a>, an open, unfiltered network of volunteer ADS-B receivers.
-    It publishes a snapshot of every aircraft it hears every 10 seconds, in one file per half hour, usually 30 to 60 minutes after the half hour ends.
-    This page downloads those files when it runs and keeps one position per aircraft per minute. Each position is assigned to
+    It records every aircraft it hears every 10 seconds, in one file per half hour, and publishes each day's files in a
+    <a href="https://github.com/adsblol/globe_history_2026/releases">daily archive on GitHub</a>. This page is built from
+    those archives, keeping one position per aircraft per minute. Each position is assigned to
     the U.S., Canada or Mexico using <a href="https://github.com/topojson/world-atlas">Natural Earth borders</a>, extended
     about 100 km offshore. "Over the U.S." includes Alaska and Hawaii. The page compares Nov. 13 with the same clock hours
     on Nov. 12. Aircraft types come from the
@@ -1589,7 +1591,7 @@ def _(PT, dt):
     BASELINE_SHIFT = 86400               # compare with the same clock time one day earlier
     SHIFTS = {"event": 0, "baseline": BASELINE_SHIFT, "week": 7 * 86400}   # "week" = Nov 6, a normal Friday
     WEEK_LABEL = "Nov 6 (a normal Friday)"
-    WORKERS = 6                          # parallel downloads (be gentle with adsb.lol)
+    WORKERS = 6                          # parallel slot decoding (each archive day is streamed once)
     PERIOD_LABEL = {"event": "Nov 13 (ground stop)", "baseline": "Nov 12 (day before)"}
     CATS = ["Airline", "Business jet", "General aviation", "Helicopter", "Other"]
 
@@ -2445,18 +2447,12 @@ def _(CATS, PT, SHIFTS, dt, gzip, io, json, mo, np, pd, re, time, urllib):
     BUNDLE_URL = "https://raw.githubusercontent.com/ktaletsk/261113-airplanes-grounded/main/public/bundle.npz"
 
 
-    class Blocked(Exception):
-        """adsb.lol refused this network (it blocks many cloud/data-center IP ranges)."""
-
-
     def fetch(url, timeout=180, tries=3):
         for i in range(tries):
             try:
                 with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=timeout) as r:
                     return r.read()
             except urllib.error.HTTPError as e:
-                if e.code in (401, 403) and "adsb.lol" in url:
-                    raise Blocked(e.read()[:400].decode("utf-8", "replace").strip()) from None
                 if e.code in (404, 502, 503) and i == tries - 1:
                     return None
             except Exception:
@@ -2477,7 +2473,7 @@ def _(CATS, PT, SHIFTS, dt, gzip, io, json, mo, np, pd, re, time, urllib):
 
 
     class NotPublished(Exception):
-        """Raised (never cached) when adsb.lol has not published a slot yet."""
+        """Raised (never cached) when a day's archive is not published yet."""
 
 
     def decode_heatmap(raw):
@@ -2499,29 +2495,6 @@ def _(CATS, PT, SHIFTS, dt, gzip, io, json, mo, np, pd, re, time, urllib):
             "gs_kt": (((a[is_pos, 3] >> 16) & 0xFFFF) / 10).astype(np.float32),
         })
         return pos, calls
-
-
-    @mo.persistent_cache
-    def load_slot(slot_start: str):
-        """One 30-min UTC slot (ISO start time) -> (one row per aircraft-minute inside the US, callsigns).
-        Published slots never change, so the result is cached on disk (and on molab across sessions);
-        a slot that is not published yet raises NotPublished, which is not cached."""
-        ts = dt.datetime.fromisoformat(slot_start)
-        slot = ts.hour * 2 + ts.minute // 30
-        url = f"https://adsb.lol/globe_history/{ts:%Y/%m/%d}/heatmap/{slot:02d}.bin.ttf"
-        raw = local_or_fetch(f"heatmap/{ts:%Y%m%d}_{slot:02d}.bin", url, valid=lambda b: b[:2] == b"\x1f\x8b")
-        if raw is None:
-            raise NotPublished(slot_start)
-        pos, calls = decode_heatmap(raw)
-        la, lo = pos.lat.values, pos.lon.values
-        pos = pos[(la >= NA_BBOX[0]) & (la <= NA_BBOX[1]) & (lo >= NA_BBOX[2]) & (lo <= NA_BBOX[3])]
-        pos["minute"] = (pos.t // 60 * 60).astype(np.int64)
-        pos = pos.sort_values("t").drop_duplicates(["hex", "minute"], keep="last")
-        calls = calls[calls.callsign != ""].sort_values("t")
-        # flight number at that moment: nearest callsign broadcast by the same aircraft (aircraft fly several legs a day)
-        pos = pd.merge_asof(pos, calls.rename(columns={"callsign": "cs"}), on="t", by="hex",
-                            direction="nearest", tolerance=900).drop(columns="t")
-        return pos, calls.drop(columns="t").drop_duplicates("hex", keep="last")
 
 
     @mo.persistent_cache
@@ -2839,19 +2812,21 @@ def _(CATS, PT, SHIFTS, dt, gzip, io, json, mo, np, pd, re, time, urllib):
     return (
         ALL_PERIODS,
         BUNDLE_URL,
-        Blocked,
+        LOCAL,
+        NA_BBOX,
         NotPublished,
         PERIODS,
+        UA,
         add_heading,
         categorize,
         country_grid,
         country_of,
+        decode_heatmap,
         find_collapse,
         fmt_pt,
         load_airports,
         load_airspace,
         load_bundle,
-        load_slot,
         load_type_db,
         movements,
         nearest_airport,
@@ -2860,6 +2835,127 @@ def _(CATS, PT, SHIFTS, dt, gzip, io, json, mo, np, pd, re, time, urllib):
         region_of,
         to_pt,
     )
+
+
+@app.cell(hide_code=True)
+def _(
+    LOCAL,
+    NA_BBOX,
+    NotPublished,
+    Path,
+    UA,
+    decode_heatmap,
+    dt,
+    io,
+    mo,
+    np,
+    pd,
+    urllib,
+):
+    # ---- data source: adsb.lol's daily archives on GitHub (never the live adsb.lol server)
+    # Each UTC day is published about 3 hours after midnight UTC as a tar split into parts (.aa, .ab, ...).
+    # The 48 half-hour "heatmap" files sit somewhere inside; the archive is streamed and only those files are kept.
+    import tarfile, tempfile
+    ARCHIVE_URL = ("https://github.com/adsblol/globe_history_{year}/releases/download/"
+                   "v{day}-planes-readsb-prod-0/v{day}-planes-readsb-prod-0.tar.{part}")
+
+
+    class ArchiveParts(io.RawIOBase):
+        # Read the parts of a split tar archive (.aa, .ab, ...) as one stream.
+        def __init__(self, day):
+            self.day, self.k, self.r, self.done = day, 0, None, False
+        def readable(self):
+            return True
+        def _open_next(self):
+            url = ARCHIVE_URL.format(year=self.day[:4], day=self.day, part="a" + "abcdefghijklmnopqrstuvwxyz"[self.k])
+            self.k += 1
+            try:
+                self.r = urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=300)
+            except urllib.error.HTTPError as e:
+                if e.code != 404 or self.k == 1:      # a missing first part means the day is not published
+                    raise
+                self.done = True                       # no further parts
+        def readinto(self, b):
+            while not self.done:
+                if self.r is None:
+                    self._open_next()
+                    continue
+                n = self.r.readinto(b)
+                if n:
+                    return n
+                self.r.close()
+                self.r = None
+            return 0
+
+
+    def heatmap_dir():
+        # data/heatmap next to the notebook, or a temporary folder where the notebook folder is read-only
+        for d in (LOCAL / "heatmap", Path(tempfile.gettempdir()) / "empty-skies-heatmap"):
+            try:
+                d.mkdir(parents=True, exist_ok=True)
+                (d / ".write-test").touch()
+                return d
+            except OSError:
+                continue
+        raise OSError("no writable folder for the archive files")
+
+
+    def heatmap_path(ts):
+        return heatmap_dir() / f"{ts:%Y%m%d}_{ts.hour * 2 + ts.minute // 30:02d}.bin"
+
+
+    def fetch_archive_day(day):
+        # Stream one UTC day's archive ('2026.11.14') and save its heatmap files; returns how many were saved.
+        got, out = 0, heatmap_dir()
+        try:
+            with tarfile.open(fileobj=io.BufferedReader(ArchiveParts(day), 1 << 20), mode="r|") as tf:
+                for m in tf:
+                    n = m.name.lstrip("./")
+                    if n.startswith("heatmap/") and n.endswith(".bin.ttf") and m.isfile():
+                        data = tf.extractfile(m).read()
+                        if data[:2] == b"\x1f\x8b":
+                            (out / f"{day.replace('.', '')}_{n.split('/')[1][:2]}.bin").write_bytes(data)
+                            got += 1
+                        if got >= 48:
+                            break
+        except urllib.error.HTTPError:
+            pass                                       # not published (yet)
+        return got
+
+
+    def ensure_archive_days(slot_starts):
+        # Download (once, one day at a time) every archive day that is not complete on disk.
+        for day in sorted({f"{t:%Y.%m.%d}" for t in slot_starts}):
+            if len(list(heatmap_dir().glob(f"{day.replace('.', '')}_*.bin"))) < 48:
+                fetch_archive_day(day)
+
+
+    def heatmap_bytes(ts):
+        p = heatmap_path(ts)
+        return p.read_bytes() if p.exists() else None
+
+
+    @mo.persistent_cache
+    def load_slot(slot_start: str):
+        # One 30-min UTC slot (ISO start time) -> (one row per aircraft-minute inside the US, callsigns).
+        # Published slots never change, so the result is cached on disk (and on molab across sessions);
+        # a slot that is not published yet raises NotPublished, which is not cached.
+        ts = dt.datetime.fromisoformat(slot_start)
+        raw = heatmap_bytes(ts)
+        if raw is None:
+            raise NotPublished(slot_start)
+        pos, calls = decode_heatmap(raw)
+        la, lo = pos.lat.values, pos.lon.values
+        pos = pos[(la >= NA_BBOX[0]) & (la <= NA_BBOX[1]) & (lo >= NA_BBOX[2]) & (lo <= NA_BBOX[3])]
+        pos["minute"] = (pos.t // 60 * 60).astype(np.int64)
+        pos = pos.sort_values("t").drop_duplicates(["hex", "minute"], keep="last")
+        calls = calls[calls.callsign != ""].sort_values("t")
+        # flight number at that moment: nearest callsign broadcast by the same aircraft (aircraft fly several legs a day)
+        pos = pd.merge_asof(pos, calls.rename(columns={"callsign": "cs"}), on="t", by="hex",
+                            direction="nearest", tolerance=900).drop(columns="t")
+        return pos, calls.drop(columns="t").drop_duplicates("hex", keep="last")
+
+    return ensure_archive_days, load_slot
 
 
 @app.cell(hide_code=True)
