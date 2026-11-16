@@ -40,7 +40,8 @@ aircraft per minute inside the US (CONUS, Alaska, Hawaii boxes), and compares th
 
 C["config"] = r'''WINDOW_START = dt.datetime(2026, 11, 13, 18, 0, tzinfo=dt.timezone.utc)   # 10:00 PT on the ground-stop day
 LOAD_START = WINDOW_START - dt.timedelta(hours=2)    # 2 h of lead-in so early departures can be matched to flight numbers
-MAX_HOURS = 24                       # stop downloading this many hours after WINDOW_START
+MAX_HOURS = 54                       # through Sun. Nov. 15, 4 p.m. PT (end of the last published daily archive)
+STORY_HOURS = 14                     # the Friday story (charts, map) runs 10 a.m. to midnight PT; the weekend is used in Part 3
 BASELINE_SHIFT = 86400               # compare with the same clock time one day earlier
 SHIFTS = {"event": 0, "baseline": BASELINE_SHIFT, "week": 7 * 86400}   # "week" = Nov 6, a normal Friday
 WEEK_LABEL = "Nov 6 (a normal Friday)"
@@ -514,16 +515,25 @@ else:
         snap, aircraft, PRE, _meta = read_bundle()
 
 if DATA_SOURCE == "live":
-    PRE, MAP_STEP, DATA_BUILT = None, {"event": 1, "baseline": 1}, int(time.time())
-    T_END = int(snap[snap.period == "event"].t.max())
+    MAP_STEP, DATA_BUILT = {"event": 1, "baseline": 1}, int(time.time())
+    T_END_ALL = int(snap[snap.period == "event"].t.max())
     AIRPORTS, AIRSPACE = load_airports(), load_airspace()
+    _air = snap[(snap.alt_ft >= 0) & (snap.country == "US")]
+    _counts = _air.groupby(["period", "category", "t"]).size().rename("n").reset_index()
+    _moves = movements(snap)
+    _moves["country"] = country_of(_moves.lat.values, _moves.lon.values, COUNTRY_GRID)
+    _moves["region"] = region_of(_moves.country.values, _moves.lat.values, _moves.lon.values)
+    PRE = {"counts": _counts, "moves": _moves, "airports": AIRPORTS}
+    del _air
 else:
-    missing, T_END, MAP_STEP, DATA_BUILT = _meta["missing"], _meta["T_END"], _meta["map_step"], _meta["built"]
+    missing, T_END_ALL, MAP_STEP, DATA_BUILT = _meta["missing"], _meta["T_END"], _meta["map_step"], _meta["built"]
     AIRPORTS, AIRSPACE = PRE["airports"], _meta.get("airspace", [])
+T_END = min(T_END_ALL, T0 + STORY_HOURS * 3600 - 60)          # end of the Friday story
+snap = snap[snap.t <= T_END]                                  # positions only needed for the Friday window
 
 _built = dt.datetime.fromtimestamp(DATA_BUILT, PT)
-_status = (f"Data: adsb.lol flight tracking, 10 a.m. Pacific on Nov. 13 to {fmt_pt(T_END)} "
-           f"{'on Nov. 14' if T_END >= T0 + 14 * 3600 else 'PT'} · snapshot built {_built:%b %-d, %-I:%M %p} PT")
+_status = (f"Data: adsb.lol flight tracking, 10 a.m. Pacific on Fri. Nov. 13 to "
+           f"{dt.datetime.fromtimestamp(T_END_ALL, PT):%a. Nov. %-d, %-I:%M %p} PT · snapshot built {_built:%b %-d, %-I:%M %p} PT")
 mo.vstack([
     mo.Html(f'<div class="er-databar"><span>{_status}</span></div>'),
     mo.Html(f'<div class="er-databar-note">{mo.callout(mo.md(NOTICE), kind="warn").text}</div>') if NOTICE else mo.md(""),
@@ -544,14 +554,7 @@ C["events_fn"] = r'''def with_events(chart, lo=None, hi=None):
     return alt.layer(*layers)'''
 
 C["derive"] = r'''# airborne aircraft per (aligned) minute over the US, by period and category; takeoffs/landings
-if PRE is None:
-    _air = snap[(snap.alt_ft >= 0) & (snap.country == "US")]
-    counts_all = _air.groupby(["period", "category", "t"]).size().rename("n").reset_index()
-    moves_full = movements(snap)
-    moves_full["country"] = country_of(moves_full.lat.values, moves_full.lon.values, COUNTRY_GRID)
-    moves_full["region"] = region_of(moves_full.country.values, moves_full.lat.values, moves_full.lon.values)
-else:                                   # snapshot: computed upstream from full 1-minute tracks
-    counts_all, moves_full = PRE["counts"], PRE["moves"]
+counts_all, moves_full = PRE["counts"], PRE["moves"]   # computed from full 1-minute tracks, Fri 8 a.m. to Sun 4 p.m. PT
 _win = lambda d: d[(d.t >= T0) & (d.t <= T_END)].copy()
 week_counts = _win(counts_all[counts_all.period == "week"])
 counts = _win(counts_all[counts_all.period.isin(PERIODS)])
@@ -562,7 +565,7 @@ week_total = week_counts.groupby("t").n.sum()
 
 # ignore the first and last 15 min, where tracks are cut by the window edges
 moves_all = moves_full[moves_full.period.isin(PERIODS)]
-week_moves = moves_full[(moves_full.period == "week") & (moves_full.t >= T0 + 900) & (moves_full.t <= T_END - 900)]
+week_moves = moves_full[(moves_full.period == "week") & (moves_full.t >= T0 + 900) & (moves_full.t <= T_END_ALL - 900)]
 moves = moves_all[(moves_all.t >= T0 + 900) & (moves_all.t <= T_END - 900)].copy()
 moves["bin"] = moves.t // 300 * 300
 moves["time_pt"] = to_pt(moves["bin"])'''
@@ -685,8 +688,9 @@ EXPORT_TO = os.environ.get("EMPTY_SKIES_EXPORT", "")
 if EXPORT_TO and not WASM:
     _p = Path(EXPORT_TO)
     _p.parent.mkdir(parents=True, exist_ok=True)
-    pack_bundle(_p, snap, aircraft, counts_all, moves_full,
-                {"T_END": T_END, "missing": missing, "built": int(time.time())}, t0=T0,
+    _keep = lambda d: d[(d.period != "baseline") | (d.t <= T_END + 3600)]     # the day-before comparison is only used on Friday
+    pack_bundle(_p, snap, aircraft, _keep(counts_all), _keep(moves_full),
+                {"T_END": T_END_ALL, "missing": missing, "built": int(time.time())}, t0=T0,
                 airports=AIRPORTS, airspace=AIRSPACE)
     print(f"wrote {_p} ({_p.stat().st_size / 1e6:.1f} MB)")'''
 

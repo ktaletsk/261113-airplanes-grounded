@@ -385,6 +385,8 @@ Parked aircraft often switch transponders off, so this mostly counts aircraft ta
 at 6:36, 6:42 and 6:49 p.m. Eastern; this data gives 1,060, 1,016 and 980 over the U.S. at the same moments, and the same
 airport counts within a few aircraft. That post describes all en-route centers failing at once; this data shows
 Chicago going quiet about 20 minutes before the rest of the country, and Alaska and Hawaii continuing to fly.
+<b>The weekend:</b> Saturday and Sunday (Sunday only to 4 p.m. Pacific, the end of the last published daily
+archive) are compared with Nov. 7 and 8. The map and the Friday charts end at midnight Friday.
 <b>Schedule estimate:</b> there is no airline schedule in ADS-B data, so each U.S. airline flight number's departure
 time on Nov. 6 (a normal Friday) stands in for its schedule. Each Nov. 6 departure is matched to the first departure of
 the same flight number on Nov. 13 between 90 minutes early and 12 hours late (Nov. 6's own delays make some flights
@@ -421,7 +423,8 @@ only "Friday afternoon", and we could not find an official FAA timeline.</p>
 C["s_end"] = r'''mo.vstack([mo.md("---"), prose("""
 *This report is a [marimo](https://marimo.io) notebook
 ([source](https://github.com/ktaletsk/261113-airplanes-grounded)). Every number and chart is computed from the data
-shown at the top of the page, from a fixed snapshot of the flight-tracking data.*
+shown at the top of the page, from a fixed snapshot of the flight-tracking data (Friday 8 a.m. to Sunday 4 p.m.
+Pacific; the weekend comes from adsb.lol's daily archives on GitHub).*
 """, cls="er-note")])'''
 
 # config cell outputs the refresh button; place it near the end with the data-status line
@@ -711,7 +714,7 @@ mo.Html(f"""
   <p class="er-dek">On Nov. 13, departures from U.S. airports stopped almost all at once at {fmt_pt(COLLAPSE_T) if COLLAPSE_T else "midday"} Pacific,
   {f"{GAP_MIN} minutes" if GAP_MIN else "shortly"} before the FAA's nationwide ground stop officially took effect, and the sky
   slowly emptied.{f" When the stop was lifted at {fmt_pt(LIFT_T)}, departures took {LAG_MIN} more minutes to restart." if LAG_MIN and LAG_MIN > 0 else (f" The stop was lifted at {fmt_pt(LIFT_T)}." if LIFTED else "")}</p>
-  <div class="er-byline">Data: adsb.lol open ADS-B network · data through {fmt_pt(T_END)} PT
+  <div class="er-byline">Data: adsb.lol open ADS-B network · Friday to Sunday, Nov. 13-15
   · Each plane inside the title stands for aircraft in the air, from 10 a.m. (left) to the latest data (right)</div>
 </div>""")'''
 
@@ -769,7 +772,7 @@ The FAA lifted the nationwide ground stop at 8:15 p.m. Eastern (5:15 p.m. Pacifi
 The number of aircraft in the air bottomed out at **{AIR_MIN:,}** at {fmt_pt(AIR_MIN_T)}, when about
 {AIR_MIN_BASE:,} would normally be flying.
 
-As of {fmt_pt(T_END)} Pacific, the latest data, airline departures were running at **{DEP_NOW_PCT}%** of the
+By {fmt_pt(T_END)} Pacific on Friday, airline departures were running at **{DEP_NOW_PCT}%** of the
 previous day's level and the number of aircraft in the air at **{AIR_NOW_PCT}%**. This page updates as new data
 comes in. The rest of the story below is how the sky emptied.
 ''') if LIFTED else prose('''
@@ -816,8 +819,8 @@ mo.Html('<div class="er-stats">'
         + _stat(f"{AIR_MIN:,}", f"aircraft over the U.S. at the low point, {fmt_pt(AIR_MIN_T)} (normally {AIR_MIN_BASE:,})", "hot")
         + (_stat(fmt_pt(LIFT_T).split()[0], f"p.m. PT: the stop is lifted; departures restart {LAG_MIN} minutes later"
                  if LAG_MIN is not None else "p.m. PT: the stop is lifted", "good") if LIFTED else "")
-        + _stat(f"{DEP_NOW_PCT}%" if DEP_NOW_PCT is not None else "–",
-                f"of normal airline departures in the latest data ({fmt_pt(T_END)})")
+        + _stat(f"{WEEKEND['sat_pct']}% · {WEEKEND['sun_pct']}%",
+                "of a normal weekend's airline departures on Saturday and Sunday")
         + '</div>')"""
 
 C["s_intro"] = r"""prose(f'''
@@ -867,7 +870,7 @@ The FAA lifted the nationwide ground stop at 8:15 p.m. Eastern (5:15 p.m. Pacifi
 
 {_zone_txt}
 
-By {fmt_pt(T_END)} Pacific, the latest data, airline departures were running at **{DEP_NOW_PCT}%** of the previous
+By {fmt_pt(T_END)} Pacific on Friday, airline departures were running at **{DEP_NOW_PCT}%** of the previous
 day's level and the number of aircraft in the air at **{AIR_NOW_PCT}%**. Airlines warned that delays and cancellations
 would continue as they got aircraft and crews back into position.
 ''') if LIFTED else prose('''
@@ -948,7 +951,7 @@ _isair = lambda m: m[(m.kind == "takeoff") & (m.category == "Airline") & (m.coun
                      & m.cs.astype(object).fillna("").astype(str).str.match(r"^[A-Z]{3}\d")
                      & ~m.cs.astype(object).fillna("").astype(str).str.match(_NOSCHED)]
 SCHED = _isair(week_moves[week_moves.region == "Lower 48"])[["cs", "t", "region"]].sort_values("t")
-_ev_full = moves_full[(moves_full.period == "event") & (moves_full.t <= T_END - 900)]   # includes the 2-hour lead-in
+_ev_full = moves_full[(moves_full.period == "event") & (moves_full.t <= T_END_ALL - 900)]   # includes the 2-hour lead-in
 ACT = _isair(_ev_full[_ev_full.region == "Lower 48"])[["cs", "t", "region"]].sort_values("t")
 _EARLY, _LATE = 90 * 60, 12 * 3600
 # match each Nov. 6 departure to the earliest free departure of the same flight number in [-90 min, +12 h];
@@ -991,10 +994,11 @@ _bk = _after.merge(MATCH.dropna(subset=["actual_t"]).drop_duplicates(["cs", "act
                    left_on=["cs", "t"], right_on=["cs", "actual_t"], how="left")
 BACKLOG = _after.assign(kind=np.select(
     [_bk.sched_t.isna().values, ((_bk.sched_t >= _c) & (_bk.sched_t < LIFT_T)).values, ((_bk.t - _bk.sched_t) <= 3600).values],
-    ["no match on Nov. 6", "held from the stop", "roughly on schedule"], "delayed evening flight"))
-BACKLOG_KINDS = ["held from the stop", "delayed evening flight", "roughly on schedule", "no match on Nov. 6"]
-BACKLOG_PCT = round(100 * (BACKLOG.kind == "held from the stop").mean()) if len(BACKLOG) else None
-_q = BACKLOG.groupby(BACKLOG.t // 900 * 900).size()
+    ["no match a week earlier", "held from the stop", "roughly on schedule"], "other flight running late"))
+BACKLOG_KINDS = ["held from the stop", "other flight running late", "roughly on schedule", "no match a week earlier"]
+_bf = BACKLOG[BACKLOG.t <= T_END]                       # Friday evening only
+BACKLOG_PCT = round(100 * (_bf.kind == "held from the stop").mean()) if len(_bf) else None
+_q = _bf.groupby(_bf.t // 900 * 900).size()
 PEAK_T = int(_q.idxmax()) if len(_q) else None
 _eve = MATCH[(MATCH.sched_t >= LIFT_T) & (MATCH.sched_t <= T_END - 1800)]
 EVE_N = len(_eve)
@@ -1598,6 +1602,159 @@ for _a, _b in [('mark_geoshape(fill="#e8590c",', 'mark_geoshape(clip=True, fill=
 _sub("origin_grid", "properties(width=118, height=80,", "properties(width=96, height=80,")
 _sub("zones_chart", "properties(width=118, height=130,", "properties(width=96, height=120,")
 
+
+# ---------------------------------------------------------------- the weekend after (Part 3 extension)
+C["findings8"] = r"""WK_END = T_END_ALL
+SAT0, SUN0 = T0 + 14 * 3600, T0 + 38 * 3600                      # Sat. and Sun. midnight PT on the aligned clock
+_tk = moves_full[(moves_full.kind == "takeoff") & (moves_full.category == "Airline") & (moves_full.region == "Lower 48")
+                 & moves_full.period.isin(["event", "week"])].copy()
+_tk["cs"] = _tk.cs.astype(object).fillna("").astype(str)
+_tk["al"] = _tk.cs.str[:3]
+_n = lambda per, lo, hi, m=None: int(((_tk.period == per) & (_tk.t >= lo) & (_tk.t < hi) & (m if m is not None else True)).sum())
+_pct = lambda lo, hi, m=None: round(100 * _n("event", lo, hi, m) / max(1, _n("week", lo, hi, m)))
+WEEKEND = {"sat_pct": _pct(SAT0, SUN0), "sun_pct": _pct(SUN0, WK_END), "sun_end": WK_END,
+           "bank_pct": _pct(SAT0 + 3 * 3600, SAT0 + 6 * 3600)}
+# first Sunday hour from which departures stay within 5% of normal for three hours
+_hrs = [(h, _pct(h, h + 3600)) for h in range(SUN0, WK_END - 3600 + 1, 3600)]
+WEEKEND["sun95"] = next((h for i, (h, p) in enumerate(_hrs) if all(q >= 95 for _, q in _hrs[i:i + 3]) and len(_hrs[i:i + 3]) == 3), None)
+# Southwest after 8 p.m. Saturday: whose flights were they?
+_late = (_tk.al == "SWA") & (_tk.t >= SAT0 + 20 * 3600) & (_tk.t < SUN0)
+WEEKEND["swa_late"], WEEKEND["swa_late_base"] = _n("event", SAT0 + 20 * 3600, SUN0, _tk.al == "SWA"), _n("week", SAT0 + 20 * 3600, SUN0, _tk.al == "SWA")
+_wk_swa = _tk[(_tk.period == "week") & (_tk.al == "SWA") & (_tk.t >= SAT0) & (_tk.t < SUN0)].groupby("cs").t.min()
+_late_cs = _tk[(_tk.period == "event") & _late].cs
+_usual = _late_cs.map(_wk_swa)
+WEEKEND["swa_afternoon_pct"] = round(100 * (((_usual - SAT0) >= 12 * 3600) & ((_usual - SAT0) < 19 * 3600)).mean()) if len(_late_cs) else None
+# airlines: Saturday and Sunday departures vs. the previous weekend
+NAMES = {"SWA": "Southwest", "AAL": "American", "DAL": "Delta", "UAL": "United", "SKW": "SkyWest", "ENY": "Envoy",
+         "RPA": "Republic", "EDV": "Endeavor", "JBU": "JetBlue", "ASA": "Alaska", "NKS": "Spirit", "FFT": "Frontier",
+         "AAY": "Allegiant", "JIA": "PSA", "QXE": "Horizon", "PDT": "Piedmont", "MXY": "Breeze", "HAL": "Hawaiian"}
+_rows = []
+for _a, _nm in NAMES.items():
+    _m = _tk.al == _a
+    if _n("week", SAT0, SUN0, _m) >= 250:
+        _rows.append({"airline": _nm, "Saturday": _pct(SAT0, SUN0, _m), "Sunday": _pct(SUN0, WK_END, _m),
+                      "sat_n": _n("event", SAT0, SUN0, _m), "sat_base": _n("week", SAT0, SUN0, _m)})
+AIRLINES_WK = pd.DataFrame(_rows).sort_values("Saturday").reset_index(drop=True)
+# scheduled flights by day (Nov. 6-8 flight numbers as the schedule); last 3 hours excluded (late flights not yet seen)
+_cut = WK_END - 3 * 3600
+DAYS = {"Friday": (T0, SAT0), "Saturday": (SAT0, SUN0), "Sunday": (SUN0, _cut)}
+_by = {d: MATCH[(MATCH.sched_t >= lo) & (MATCH.sched_t < hi)] for d, (lo, hi) in DAYS.items()}
+DAY_SHARES = {d: (m.status.value_counts(normalize=True).reindex(STATUSES, fill_value=0) * 100).round().astype(int).to_dict()
+              for d, m in _by.items()}
+SAT_CANCEL = max(0, round((DAY_SHARES["Saturday"]["not seen departing"] - FLOOR["not seen departing"]) / 100 * len(_by["Saturday"])))
+_fl = MATCH[(MATCH.sched_t >= T0 + 900) & (MATCH.sched_t < (COLLAPSE_T or T0) - 3600) & MATCH.actual_t.notna()]
+NORMAL_DELAY = float(_fl.delay_min.median()) if len(_fl) else 0.0
+DAY_DELAY = {d: float(m[m.actual_t.notna()].delay_min.median()) for d, m in _by.items() if m.actual_t.notna().any()}"""
+
+C["s_weekend"] = r"""_w = WEEKEND
+_ds = DAY_SHARES
+_slow = AIRLINES_WK.head(2)
+prose(f'''
+## The weekend after
+
+The backlog did not clear overnight. Compared with the previous weekend, Nov. 7 and 8, airline departures from
+lower-48 airports ran at **{_w["sat_pct"]}%** on Saturday and **{_w["sun_pct"]}%** on Sunday up to
+{fmt_pt(_w["sun_end"])} Pacific, where this data ends. Saturday's first wave of flights, 6 to 9 a.m. Eastern, was
+hit hardest at **{_w["bank_pct"]}%** of normal, as crews and aircraft started the day in the wrong places.
+{f"From {fmt_pt(_w['sun95'])} Pacific on Sunday, departures stayed within 5% of normal." if _w["sun95"] else ""}
+
+Late Saturday evening, departures briefly ran well above normal. Most of the extra flights were Southwest's:
+{_w["swa_late"]} took off between 8 p.m. and midnight Pacific, against {_w["swa_late_base"]} a week earlier, and
+{_w["swa_afternoon_pct"]}% of them carried flight numbers that normally leave between noon and 7 p.m. They were
+Saturday's afternoon flights, running hours late.
+
+By the same flight-number estimate as above, {_ds["Saturday"]["not seen departing"]}% of Saturday's usual flights were
+not seen departing, against a normal level of about {FLOOR["not seen departing"]:.0f}%: roughly **{round(SAT_CANCEL, -2):,}
+cancellations**. On Sunday that share was {_ds["Sunday"]["not seen departing"]}%, close to normal, but only
+{_ds["Sunday"]["on time (±15 min)"]}% of flights left on time, against {FLOOR["on time (±15 min)"]:.0f}% on a normal
+morning. {_slow.iloc[0]["airline"]} and {_slow.iloc[1]["airline"]} were the slowest to recover, at
+{int(_slow.iloc[0]["Saturday"])}% and {int(_slow.iloc[1]["Saturday"])}% of their usual Saturday departures.
+''')"""
+
+C["airline_chart"] = r"""_d = AIRLINES_WK.melt(id_vars=["airline"], value_vars=["Saturday", "Sunday"], var_name="day", value_name="pct")
+_order = AIRLINES_WK.airline.tolist()
+_y = alt.Y("airline:N", sort=_order, title=None)
+_xs = alt.Scale(domain=[40, 110], zero=False)
+_rule = alt.Chart(AIRLINES_WK).mark_rule(color="#868e96", strokeWidth=2).encode(y=_y, x=alt.X("Saturday:Q", scale=_xs), x2="Sunday:Q")
+_ref = alt.Chart(pd.DataFrame({"x": [100]})).mark_rule(color="#adb5bd", strokeDash=[4, 3]).encode(x=alt.X("x:Q", scale=_xs))
+_pts = alt.Chart(_d).mark_circle(size=110, opacity=1).encode(
+    y=_y, x=alt.X("pct:Q", title="% of the previous weekend's departures", scale=_xs),
+    color=alt.Color("day:N", title=None, scale=alt.Scale(domain=["Saturday", "Sunday"], range=["#e8590c", "#1c7ed6"]),
+                    legend=alt.Legend(orient="top")),
+    tooltip=["airline:N", "day:N", alt.Tooltip("pct:Q", title="% of previous weekend")])
+airline_chart = alt.layer(_ref, _rule, _pts).properties(width="container", height=alt.Step(22), title=alt.Title(
+    "Some airlines took longer to recover",
+    subtitle=f"Departures from lower-48 airports vs. Nov. 7-8: Saturday, and Sunday to {fmt_pt(WEEKEND['sun_end'])} PT"))
+airline_chart"""
+
+C["backlog_chart"] = r"""_b = BACKLOG.assign(b=BACKLOG.t // 1800 * 1800).groupby(["b", "kind"]).size().rename("n").reset_index()
+_b["time_pt"] = to_pt(_b.b + 900)
+_wkq = week_moves[(week_moves.kind == "takeoff") & (week_moves.category == "Airline") & (week_moves.country == "US")
+                  & (week_moves.t >= (BACKLOG.t.min() if len(BACKLOG) else T0))]
+_wkq = _wkq.groupby(_wkq.t // 1800 * 1800).size().rename("n").reset_index().rename(columns={"t": "b"})
+_wkq["time_pt"] = to_pt(_wkq.b + 900)
+_wkq = _wkq[_wkq.b <= _b.b.max()] if len(_b) else _wkq
+_x = alt.X("time_pt:T", title=None, axis=alt.Axis(format="%a %-I %p", tickCount=6, labelAngle=0))
+_area = alt.Chart(_b).mark_area(opacity=0.9, interpolate="monotone").encode(
+    x=_x, y=alt.Y("n:Q", stack="zero", title="airline departures / 30 min"),
+    color=alt.Color("kind:N", title=None, sort=BACKLOG_KINDS, legend=alt.Legend(orient="top", columns=1),
+                    scale=alt.Scale(domain=BACKLOG_KINDS, range=["#e8590c", "#fab005", "#1c7ed6", "#868e96"])),
+    order=alt.Order("kind_order:Q"),
+    tooltip=["kind:N", alt.Tooltip("time_pt:T", format="%a %-I:%M %p"), "n:Q"]).transform_calculate(
+    kind_order=f"indexof({BACKLOG_KINDS}, datum.kind)")
+_ref = alt.Chart(_wkq).mark_line(strokeDash=[1, 3], color="#ced4da", strokeWidth=1.8).encode(
+    x="time_pt:T", y="n:Q", tooltip=[alt.Tooltip("time_pt:T", format="%a %-I:%M %p"), alt.Tooltip("n:Q", title="a week earlier")])
+backlog_chart = with_events(alt.layer(_area, _ref), lo=int(BACKLOG.t.min()) if len(BACKLOG) else None).properties(
+    width="container", height=280, title=alt.Title(
+        "The backlog left in a wave, then the weekend ran short",
+        subtitle=f"U.S. airline departures from the lift to Sun. {fmt_pt(WK_END)} PT, by how each flight number compares with "
+                 "the same day a week earlier (estimated) · dotted: all departures a week earlier"))
+backlog_chart"""
+
+C["sched_chart"] = r"""_m = MATCH[(MATCH.sched_t >= T0 + 900) & (MATCH.sched_t < WK_END - 3 * 3600)]
+_s = (_m.assign(b=_m.sched_t // 3600 * 3600).groupby(["b", "status"]).size()
+      .unstack(fill_value=0).reindex(columns=STATUSES, fill_value=0))
+_sh = _s.div(_s.sum(axis=1), axis=0) * 100
+_top = _sh.cumsum(axis=1)
+_r = pd.DataFrame([{"b": _b, "status": _st, "y0": _top.loc[_b, _st] - _sh.loc[_b, _st], "y1": _top.loc[_b, _st],
+                    "share": _sh.loc[_b, _st], "n": int(_s.loc[_b, _st])} for _b in _sh.index for _st in STATUSES])
+_r["x0"], _r["x1"] = to_pt(_r.b + 120), to_pt(_r.b + 3480)
+_floor = 100 - FLOOR["not seen departing"]
+_rule = alt.Chart(pd.DataFrame({"y": [_floor]})).mark_rule(
+    color="#f8f9fa", strokeDash=[4, 3], strokeWidth=1.2).encode(y="y:Q")
+_lab = alt.Chart(pd.DataFrame({"y": [_floor], "x0": [to_pt(pd.Series([WK_END - 3 * 3600])).iloc[0]], "label": ["normal 'not seen' level"]})).mark_text(
+    color="#f8f9fa", align="right", dy=-7, fontSize=12, fontWeight="bold").encode(y="y:Q", x="x0:T", text="label:N")
+sched_chart = with_events(alt.layer(alt.Chart(_r).mark_rect().encode(
+    x=alt.X("x0:T", title="scheduled departure (time a week earlier, Pacific)", axis=alt.Axis(format="%a %-I %p", tickCount=6, labelAngle=0)),
+    x2="x1:T",
+    y=alt.Y("y0:Q", title="% of scheduled flights", scale=alt.Scale(domain=[0, 100])), y2="y1:Q",
+    color=alt.Color("status:N", title=None, sort=STATUSES, legend=alt.Legend(orient="top", columns=1),
+                    scale=alt.Scale(domain=STATUSES, range=["#2f9e44", "#fab005", "#e8590c", "#868e96"])),
+    tooltip=["status:N", alt.Tooltip("x0:T", format="%a %-I %p", title="scheduled hour"), "n:Q",
+             alt.Tooltip("share:Q", format=".0f", title="%")]), _rule, _lab)).properties(width="container", height=260, title=alt.Title(
+    "What happened to each scheduled departure, Friday to Sunday (estimated)",
+    subtitle="Lower-48 airline flight numbers by the hour they left a week earlier, and what the same flight number did this time"))
+sched_chart"""
+
+C["delay_chart"] = r"""_d = MATCH[(MATCH.sched_t >= T0 + 900) & (MATCH.sched_t < WK_END - 3 * 3600) & MATCH.actual_t.notna()]
+_d = _d.assign(b=_d.sched_t // 7200 * 7200).groupby("b").delay_min.agg(
+    q25=lambda x: x.quantile(.25), med="median", q75=lambda x: x.quantile(.75), n="size").reset_index()
+_d = _d[_d.n >= 30]
+for _c in ["q25", "med", "q75"]:
+    _d[_c] = _d[_c] / 60
+_d["time_pt"] = to_pt(_d.b + 3600)
+_x = alt.X("time_pt:T", title="scheduled departure (time a week earlier, Pacific)", axis=alt.Axis(format="%a %-I %p", tickCount=6, labelAngle=0))
+_band = alt.Chart(_d).mark_area(color="#e8590c", opacity=0.25, interpolate="monotone").encode(x=_x, y="q25:Q", y2="q75:Q")
+_line = alt.Chart(_d).mark_line(color="#e8590c", strokeWidth=2.4, interpolate="monotone", point=alt.OverlayMarkDef(size=20)).encode(
+    x=_x, y=alt.Y("med:Q", title="hours late"),
+    tooltip=[alt.Tooltip("time_pt:T", format="%a %-I %p", title="scheduled around"), alt.Tooltip("med:Q", format=".1f", title="median h late"),
+             alt.Tooltip("q75:Q", format=".1f", title="75th percentile"), alt.Tooltip("n:Q", title="flights")])
+_norm = alt.Chart(pd.DataFrame({"y": [NORMAL_DELAY / 60]})).mark_rule(color="#adb5bd", strokeDash=[4, 3]).encode(y="y:Q")
+delay_chart = with_events(alt.layer(_band, _line, _norm)).properties(width="container", height=240, title=alt.Title(
+    "How late flights left, Friday to Sunday (estimated)",
+    subtitle="Median delay of flights that flew, by scheduled time (2-hour groups); band: middle half of flights; dashed: a normal morning"))
+delay_chart"""
+
 # every chart cell ends with fig(<chart>)
 import re as _re
 for _k in list(C):
@@ -1626,9 +1783,9 @@ ORDER = ["style", "header", "load", "summary_stats", "recovery_chart", "s_intro"
          "s_map2", "map_controls", "map",
          "part2", "s_who", "category_chart", "s_bizjet", "s_states", "states_chart", "s_intl", "intl_chart", "s_gateways", "gateway_chart", "airspace_map",
          "s_neighbors", "neighbors_chart", "s_tarmac", "tarmac_chart",
-         "part3", "s_recovery2", "restart_chart", "s_backlog", "backlog_chart", "s_sched", "sched_chart", "delay_chart", "context_head", "s_history",
+         "part3", "s_recovery2", "restart_chart", "s_backlog", "backlog_chart", "s_sched", "sched_chart", "delay_chart", "s_weekend", "airline_chart", "context_head", "s_history",
          "method", "s_end", "config",
-         "imports", "part_fn", "derive", "findings", "findings2", "findings3", "findings4", "findings5", "findings6", "findings7", "export",
+         "imports", "part_fn", "derive", "findings", "findings2", "findings3", "findings4", "findings5", "findings6", "findings7", "findings8", "export",
          "events_fn", "widget", "helpers", "assets"]
 
 async with cm.get_context(skip_staleness_check=True) as ctx:
