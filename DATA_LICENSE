@@ -1,0 +1,30 @@
+Data license
+============
+
+Flight data: adsb.lol
+---------------------
+The aircraft position data used in this project comes from adsb.lol (https://adsb.lol), via its daily
+archives on GitHub (https://github.com/adsblol/globe_history_2026). adsb.lol makes this data available under
+the Open Database License (ODbL) 1.0: https://opendatacommons.org/licenses/odbl/1-0/
+
+Derived database: public/bundle.npz
+-----------------------------------
+public/bundle.npz is a derived database produced from the adsb.lol data (per-minute aircraft positions over
+North America, per-minute airborne counts, and detected takeoffs and landings, for Nov. 6-8 and Nov. 12-15,
+2026). It is released under the Open Database License (ODbL) 1.0:
+https://opendatacommons.org/licenses/odbl/1-0/
+
+It can be regenerated from the original adsb.lol archives with the code in this repository
+(scripts/download.sh and scripts/update_snapshot.sh). Any public use of this database or of works produced
+from it must attribute adsb.lol and keep derived databases under the ODbL 1.0.
+
+The session file __marimo__/session/grounded.py.json contains outputs computed from the same data and is
+covered by the same terms.
+
+Other data
+----------
+The snapshot also includes, or the notebook uses, data from these sources, each under its own terms:
+- Aircraft registrations and types: tar1090-db, https://github.com/wiedehopf/tar1090-db
+- Airports: OurAirports, https://ourairports.com/data/
+- Country and state borders: Natural Earth via world-atlas and us-atlas, https://github.com/topojson
+- En-route center outlines: VATSpy data project, https://github.com/vatsimnetwork/vatspy-data-project

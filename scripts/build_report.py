@@ -168,6 +168,7 @@ mo.Html("""
                 line-height: 1.0; letter-spacing: -.02em; margin: 10px 0 14px; }
   .er-dek { font-family: 'Source Serif 4', Georgia, serif; font-size: 23px; line-height: 1.4; opacity: .85; margin: 0 0 18px; }
   .er-byline { font: 500 13px Inter, sans-serif; opacity: .6; border-top: 1px solid rgba(127,127,127,.3); padding-top: 12px; }
+  .er-byline a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
   .er-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 18px; padding: 14px 0 6px; }
   .er-stat .v { font: 700 34px/1.1 Inter, sans-serif; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
   .er-stat .v.hot { color: #e03131; } .er-stat .v.warm { color: #f08c00; } .er-stat .v.good { color: #2f9e44; }
@@ -235,7 +236,7 @@ C["s_cliff"] = r'''prose(f"""
 
 Counting airline takeoffs minute by minute makes the timing plain. The rate did not taper off as you might expect if
 airlines were holding flights at the gate one by one. It fell off a cliff, from about {BEFORE_RATE:.0f} a minute to {AFTER_RATE:.0f},
-between {fmt_pt(COLLAPSE_T)} and {fmt_pt(COLLAPSE_T + 120)}. The official ground-stop time comes
+between {fmt_pt(COLLAPSE_T)} and {fmt_pt(COLLAPSE_T + 120)} Pacific. The official ground-stop time comes
 {GAP_MIN} minutes later, in the shaded gap below.
 
 Early reports cited the 2:54 p.m. Central time. The data suggests departures were already being held in practice
@@ -357,7 +358,10 @@ C["method"] = r'''mo.accordion({"How we did this": mo.Html(f"""<div class="er-me
 <p>Positions come from <a href="https://adsb.lol">adsb.lol</a>, an open, unfiltered network of volunteer ADS-B receivers.
 It records every aircraft it hears every 10 seconds, in one file per half hour, and publishes each day's files in a
 <a href="https://github.com/adsblol/globe_history_2026/releases">daily archive on GitHub</a>. This page is built from
-those archives, keeping one position per aircraft per minute. Each position is assigned to
+those archives, keeping one position per aircraft per minute. adsb.lol makes the data available under the
+<a href="https://opendatacommons.org/licenses/odbl/1-0/">Open Database License (ODbL) 1.0</a>; the processed snapshot this
+page loads is a derived database, released under the ODbL 1.0 in the
+<a href="https://github.com/ktaletsk/261113-airplanes-grounded">project repository</a> (see its DATA_LICENSE). Each position is assigned to
 the U.S., Canada or Mexico using <a href="https://github.com/topojson/world-atlas">Natural Earth borders</a>, extended
 about 100 km offshore. "Over the U.S." includes Alaska and Hawaii. The page compares Nov. 13 with the same clock hours
 on Nov. 12. Aircraft types come from the
@@ -715,7 +719,7 @@ mo.Html(f"""
   <p class="er-dek">On Nov. 13, departures from U.S. airports stopped almost all at once at {fmt_pt(COLLAPSE_T) if COLLAPSE_T else "midday"} Pacific,
   {f"{GAP_MIN} minutes" if GAP_MIN else "shortly"} before the FAA's nationwide ground stop officially took effect, and the sky
   slowly emptied.{f" When the stop was lifted at {fmt_pt(LIFT_T)}, departures took {LAG_MIN} more minutes to restart." if LAG_MIN and LAG_MIN > 0 else (f" The stop was lifted at {fmt_pt(LIFT_T)}." if LIFTED else "")}</p>
-  <div class="er-byline">Data: adsb.lol open ADS-B network · Friday to Sunday, Nov. 13-15
+  <div class="er-byline">Data: <a href="https://adsb.lol">adsb.lol</a>, ODbL 1.0 · Friday to Sunday, Nov. 13-15
   · Each plane inside the title stands for aircraft in the air, from 10 a.m. (left) to the latest data (right)</div>
 </div>""")'''
 
@@ -1043,7 +1047,7 @@ The bold lines are Nov. 13; the faint lines show the same hours on Nov. 12 (dash
 own afternoon.
 
 At {fmt_pt(COLLAPSE_T)} Pacific, departures fell off a cliff. The number of aircraft in the air drained for hours as
-flights already aloft landed, bottoming out at {AIR_MIN:,} at {fmt_pt(AIR_MIN_T)}{f". After the FAA lifted the stop at {fmt_pt(LIFT_T)}, departures surged, briefly overshot and then settled well below normal; Part 3 explains why." if LIFTED else "."}
+flights already aloft landed, bottoming out at {AIR_MIN:,} at {fmt_pt(AIR_MIN_T)} Pacific{f". After the FAA lifted the stop at {fmt_pt(LIFT_T)}, departures surged, briefly overshot and then settled well below normal; Part 3 explains why." if LIFTED else "."}
 
 This page tells it in three parts: how the sky emptied, what kept flying when it was nearly empty, and how it came back.
 ''')"""
@@ -1755,6 +1759,40 @@ delay_chart = with_events(alt.layer(_band, _line, _norm)).properties(width="cont
     "How late flights left, Friday to Sunday (estimated)",
     subtitle="Median delay of flights that flew, by scheduled time (2-hour groups); band: middle half of flights; dashed: a normal morning"))
 delay_chart"""
+
+
+# ---------------------------------------------------------------- "Where it started", rewritten with the FAA's findings
+C["s_origin"] = r"""_q = APT_Q
+_chi = ZoneInfo("America/Chicago")
+prose(f'''
+## Where it started
+
+The fault was hundreds of miles from where it first showed. The FAA traced it to a new router that its network
+contractor, L3Harris, was installing at a radio site in **El Dorado, Arkansas**, and to a radar site in
+**Amarillo, Texas**. Together they flooded the agency's aging telecommunications network with about 1,000
+connection attempts every four to five seconds, and radio and radar became unstable at 17 of its 22 en-route
+centers ([FAA](https://www.faa.gov/newsroom/nationwide-ground-stop-questions-and-answers)).
+
+The failure surfaced first around Chicago. The FAA stopped departures at O'Hare for communication problems around
+3:10 p.m. Eastern, according to its advisories
+([Aviation24](https://aviation24news.com/faa-halts-departures-nationwide-as-air-traffic-control-communications-fail/),
+[CBS Chicago](https://www.cbsnews.com/chicago/news/ground-stop-chicago-ohare-midway-airports-equipment-outage/)),
+and controllers in the region warned that "Chicago Approach is going ATC zero"
+([The Verge](https://www.theverge.com/transportation/1034039/faa-aviation-glitch-meltdown-ground-stop)).
+In this data, O'Hare's last airline departure left at **{fmt_pt(ORD_STOP)} Pacific**
+({dt.datetime.fromtimestamp(ORD_STOP, _chi):%-I:%M} in Chicago), {round(((COLLAPSE_T or T0) - ORD_STOP) / 60)} minutes
+before the rest of the country. By the time departures stopped everywhere, O'Hare would normally have sent off about
+{ORD_MISSED} more airline flights. Every carrier there stopped at once, while airlines elsewhere kept departing at
+normal rates. Midway, also stopped, is too small to time precisely; its last departure was at {fmt_pt(MDW_STOP)} Pacific.
+
+Then the rest of the country followed within minutes. The FAA says the network became unstable at 3:36 p.m.
+Eastern, which is 12:36 Pacific; half of the busiest airports sent off their last departure between
+{fmt_pt(_q[0])} and {fmt_pt(_q[2])} Pacific. The outages spread from the Chicago en-route center to Boston, Washington,
+New York and Minneapolis, [The Air Current](https://theaircurrent.com/feed/dispatches/u-s-halts-flight-departures-nationwide-on-air-traffic-communications-outage/)
+reported, and the formal nationwide ground stop came at 3:54. The map shows when each busy airport went quiet.
+''') if FIRST_APT else prose("## Where it started\\n\\nNot enough data.")"""
+
+_sub("origin_map", 'title=alt.Title("Chicago went quiet first",', 'title=alt.Title("O\'Hare went quiet first",')
 
 # every chart cell ends with fig(<chart>)
 import re as _re

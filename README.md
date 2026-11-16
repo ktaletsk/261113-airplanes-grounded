@@ -34,6 +34,9 @@ Positions come from [adsb.lol](https://adsb.lol), an open, unfiltered ADS-B netw
 "heatmap" files per UTC day: every aircraft every 10 seconds, one file per half hour. Only those files are used;
 the live adsb.lol server is never contacted.
 
+Flight data is available from adsb.lol under the [Open Database License (ODbL) 1.0](https://opendatacommons.org/licenses/odbl/1-0/).
+The derived snapshot `public/bundle.npz` is released under the ODbL 1.0 as well; see [DATA_LICENSE](DATA_LICENSE).
+
 Window: Fri. Nov. 13, 8 a.m. PT to Sun. Nov. 15, 4 p.m. PT (the end of the Nov. 15 archive), compared with the day
 before (Nov. 12) and the same days a week earlier (Nov. 6-8).
 
