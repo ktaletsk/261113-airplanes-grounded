@@ -600,9 +600,37 @@ if DATA_SOURCE == "live":
     _moves["region"] = region_of(_moves.country.values, _moves.lat.values, _moves.lon.values)
     PRE = {"counts": _counts, "moves": _moves, "airports": AIRPORTS}
     del _air
+    # Epilogue: United's own system outage on Mon. Nov. 16. Takeoffs per 15 minutes from noon to 4 p.m. PT for a few
+    # carrier groups, that Monday and the Monday before (tracks start at 10 a.m. PT so takeoffs can be detected).
+    _MON = dt.datetime(2026, 11, 16, 18, 0, tzinfo=dt.timezone.utc)
+    _EP_GROUPS = {"United": ["UAL"], "United Express operators": ["SKW", "RPA", "ASH", "GJS", "UCA"],
+                  "Delta": ["DAL"], "American": ["AAL"], "Southwest": ["SWA"]}
+    _bins = list(range(int(_MON.timestamp()) + 2 * 3600, int(_MON.timestamp()) + 6 * 3600, 900))
+    EPILOGUE = {"bins": _bins, "groups": {_g: {} for _g in _EP_GROUPS}}
+    for _per, _shift in (("event", 0), ("baseline", 7 * 86400)):
+        _starts = [_MON - dt.timedelta(seconds=_shift) + dt.timedelta(minutes=30 * _k) for _k in range(12)]
+        ensure_archive_days(_starts)
+        _fr = []
+        for _ts in _starts:
+            try:
+                _fr.append(load_slot(_ts.isoformat())[0])
+            except NotPublished:
+                pass
+        if not _fr:
+            continue
+        _d = pd.concat(_fr, ignore_index=True)
+        _d = _d.assign(period=_per, category="", t=_d.minute + _shift)
+        _mv = movements(_d)
+        _mv = _mv[_mv.kind == "takeoff"]
+        _mv = _mv[country_of(_mv.lat.values, _mv.lon.values, COUNTRY_GRID) == "US"]
+        _al = _mv.cs.astype(object).fillna("").astype(str).str[:3]
+        for _g, _pre in _EP_GROUPS.items():
+            _cnt = _mv[_al.isin(_pre)].groupby(_mv.t // 900 * 900).size()
+            EPILOGUE["groups"][_g][_per] = [int(_cnt.get(_b, 0)) for _b in _bins]
 else:
     missing, T_END_ALL, MAP_STEP, DATA_BUILT = _meta["missing"], _meta["T_END"], _meta["map_step"], _meta["built"]
     AIRPORTS, AIRSPACE = PRE["airports"], _meta.get("airspace", [])
+    EPILOGUE = _meta.get("epilogue")
 T_END = min(T_END_ALL, T0 + STORY_HOURS * 3600 - 60)          # end of the Friday story
 snap = snap[snap.t <= T_END]                                  # positions only needed for the Friday window
 
@@ -765,7 +793,7 @@ if EXPORT_TO and not WASM:
     _p.parent.mkdir(parents=True, exist_ok=True)
     _keep = lambda d: d[(d.period != "baseline") | (d.t <= T_END + 3600)]     # the day-before comparison is only used on Friday
     pack_bundle(_p, snap, aircraft, _keep(counts_all), _keep(moves_full),
-                {"T_END": T_END_ALL, "missing": missing, "built": int(time.time())}, t0=T0,
+                {"T_END": T_END_ALL, "missing": missing, "built": int(time.time()), "epilogue": EPILOGUE}, t0=T0,
                 airports=AIRPORTS, airspace=AIRSPACE)
     print(f"wrote {_p} ({_p.stat().st_size / 1e6:.1f} MB)")'''
 

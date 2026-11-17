@@ -392,6 +392,9 @@ airport counts within a few aircraft. That post describes all en-route centers f
 Chicago going quiet about 20 minutes before the rest of the country, and Alaska and Hawaii continuing to fly.
 <b>The weekend:</b> Saturday and Sunday (Sunday only to 4 p.m. Pacific, the end of the last published daily
 archive) are compared with Nov. 7 and 8. The map and the Friday charts end at midnight Friday.
+<b>Epilogue:</b> U.S. takeoffs from noon to 4 p.m. Pacific on Monday, Nov. 16, compared with Monday, Nov. 9. "United" means
+flights with United's own UAL callsign; "United Express operators" are SkyWest, Republic, Mesa, GoJet and CommuteAir, which
+also fly for other airlines.
 <b>Schedule estimate:</b> there is no airline schedule in ADS-B data, so each U.S. airline flight number's departure
 time on Nov. 6 (a normal Friday) stands in for its schedule. Each Nov. 6 departure is matched to the first departure of
 the same flight number on Nov. 13 between 90 minutes early and 12 hours late (Nov. 6's own delays make some flights
@@ -422,7 +425,9 @@ only "Friday afternoon", and we could not find an official FAA timeline.</p>
 <a href="https://en.wikipedia.org/wiki/2026_US_ground_stop">Wikipedia</a> ·
 <a href="https://www.youtube.com/watch?v=XNzzfW6Ki2I">CNN (live coverage)</a> ·
 <a href="https://www.youtube.com/watch?v=VJ9BRW0LtOg">CNN (origin and stranded passengers)</a> ·
-<a href="https://x.com/jon_vs_moloch/status/2121395654354170192">parallel ADS-B analysis</a></p>
+<a href="https://x.com/jon_vs_moloch/status/2121395654354170192">parallel ADS-B analysis</a> ·
+<a href="https://www.cnbc.com/2026/11/16/united-airlines-outage-faa.html">CNBC</a> ·
+<a href="https://apnews.com/article/united-airlines-outage-5a5e5f75bb07f11ffb8750901f0076ff">AP</a></p>
 </div>""")})'''
 
 C["s_end"] = r'''mo.vstack([mo.md("---"), prose("""
@@ -747,6 +752,10 @@ if STOP_RATE and LIFTED:
             RECOVERY_T = int(_t)
             break
 LAG_MIN = round((RECOVERY_T - LIFT_T) / 60) if RECOVERY_T else None
+_r30e, _r30b = rec_ev.rolling(30).sum(), rec_bs.rolling(30).sum()
+_share = (_r30e / _r30b.replace(0, np.nan))[rec_ev.index >= (COLLAPSE_T or T0)]
+_tl = int(_share.idxmin())
+DEP_LOW = {"share": float(_share.min()), "t0": _tl - 29 * 60, "t1": _tl + 60, "n": int(_r30e[_tl]), "base": int(_r30b[_tl])}
 _w = lambda s: s[s.index >= _idx[-1] - 1799].sum()
 DEP_NOW = (_w(rec_ev) / 30, _w(rec_bs) / 30)
 DEP_NOW_PCT = round(100 * DEP_NOW[0] / DEP_NOW[1]) if DEP_NOW[1] else None
@@ -821,11 +830,12 @@ C["summary_stats"] = r"""_stat = lambda v, l, cls="": f'<div class="er-stat"><di
 mo.Html('<div class="er-stats">'
         + _stat(fmt_pt(COLLAPSE_T).split()[0] if COLLAPSE_T else "–",
                 f"p.m. PT: airline departures collapse, {GAP_MIN} minutes before the FAA's ground stop", "warm")
-        + _stat(f"{AIR_MIN:,}", f"aircraft over the U.S. at the low point, {fmt_pt(AIR_MIN_T)} (normally {AIR_MIN_BASE:,})", "hot")
+        + _stat(f"{round(100 * DEP_LOW['share'])}%",
+                f"of normal airline departures at the lowest, {fmt_pt(DEP_LOW['t0']).split()[0]}–{fmt_pt(DEP_LOW['t1'])} PT "
+                f"({DEP_LOW['n']} vs. {DEP_LOW['base']:,})", "hot")
         + (_stat(fmt_pt(LIFT_T).split()[0], f"p.m. PT: the stop is lifted; departures restart {LAG_MIN} minutes later"
                  if LAG_MIN is not None else "p.m. PT: the stop is lifted", "good") if LIFTED else "")
-        + _stat(f"{WEEKEND['sat_pct']}% · {WEEKEND['sun_pct']}%",
-                "of a normal weekend's airline departures on Saturday and Sunday")
+        + _stat(f"{AIR_MIN:,}", f"aircraft over the U.S. at the low point, {fmt_pt(AIR_MIN_T)} (normally {AIR_MIN_BASE:,})", "hot")
         + '</div>')"""
 
 C["s_intro"] = r"""prose(f'''
@@ -1794,6 +1804,76 @@ reported, and the formal nationwide ground stop came at 3:54. The map shows when
 
 _sub("origin_map", 'title=alt.Title("Chicago went quiet first",', 'title=alt.Title("O\'Hare went quiet first",')
 
+
+# ---------------------------------------------------------------- Epilogue: United's outage on Monday, Nov. 16
+C["findings9"] = r"""EP = None
+if EPILOGUE and EPILOGUE["groups"]["United"].get("event") and EPILOGUE["groups"]["United"].get("baseline"):
+    _bins = np.array(EPILOGUE["bins"])
+    _g = {k: (np.array(v["event"]), np.array(v["baseline"])) for k, v in EPILOGUE["groups"].items() if v.get("event")}
+    _ue, _ub = _g["United"]
+    _r = _ue / np.maximum(_ub, 1)
+    _low = np.nonzero(_r < 0.65)[0]
+    if len(_low):
+        _i0 = _low[0]
+        _i1 = _i0
+        while _i1 + 1 < len(_r) and _r[_i1 + 1] < 0.65:
+            _i1 += 1
+        _sl, _after = slice(_i0, _i1 + 1), slice(_i1 + 1, min(_i1 + 4, len(_r)))
+        EP = {"t0": int(_bins[_i0]), "t1": int(_bins[_i1] + 900), "n": int(_ue[_sl].sum()), "base": int(_ub[_sl].sum()),
+              "after_n": int(_ue[_after].sum()), "after_base": int(_ub[_after].sum()),
+              "others": {k: round(100 * e[_sl].sum() / max(1, b[_sl].sum())) for k, (e, b) in _g.items() if k != "United"}}
+        EP["pct"] = round(100 * EP["n"] / max(1, EP["base"]))
+        EP["after_pct"] = round(100 * EP["after_n"] / max(1, EP["after_base"]))"""
+
+C["s_epilogue"] = r"""_e = EP
+prose(f'''
+## Epilogue: Monday
+
+Three days later, departures dipped again, but only for one airline. On Monday afternoon, Nov. 16, United Airlines
+reported a "widespread system outage" affecting departing flights: pilots could not get the final weight-and-balance
+figures they need for takeoff. United said flights already in the air and its regional United Express flights were
+not affected, and that there was no sign of a cyberattack
+([CNBC](https://www.cnbc.com/2026/11/16/united-airlines-outage-faa.html),
+[AP](https://apnews.com/article/united-airlines-outage-5a5e5f75bb07f11ffb8750901f0076ff)).
+
+The data bears that out. From {fmt_pt(_e["t0"])} to {fmt_pt(_e["t1"])} Pacific, United's own departures ran at
+**{_e["pct"]}%** of the Monday before ({_e["n"]} against {_e["base"]}), a slowdown rather than a stop. Delta
+({_e["others"].get("Delta", "–")}%), American ({_e["others"].get("American", "–")}%) and Southwest
+({_e["others"].get("Southwest", "–")}%) carried on as usual, and so did the regional operators that fly United Express
+routes ({_e["others"].get("United Express operators", "–")}%). In the next 45 minutes, United's held flights left in a
+small wave: **{_e["after_pct"]}%** of its usual departures, a miniature of Friday night's backlog.
+''') if _e else prose("## Epilogue: Monday\\n\\nThe data for Monday is not in this snapshot.")"""
+
+C["epilogue_chart"] = r"""_rows = []
+if EPILOGUE:
+    for _k, _v in EPILOGUE["groups"].items():
+        if _v.get("event") and _v.get("baseline"):
+            for _b, _n, _m in zip(EPILOGUE["bins"], _v["event"], _v["baseline"]):
+                _rows.append({"t": _b, "group": _k, "pct": 100 * _n / max(1, _m), "n": _n, "base": _m})
+_d = pd.DataFrame(_rows)
+_order = ["United", "United Express operators", "Delta", "American", "Southwest"]
+if len(_d):
+    _d["time_pt"] = to_pt(_d.t + 450)
+    _ref = alt.Chart(pd.DataFrame({"y": [100]})).mark_rule(color="#adb5bd", strokeDash=[4, 3]).encode(y="y:Q")
+    _lines = alt.Chart(_d).mark_line(interpolate="monotone").encode(
+        x=alt.X("time_pt:T", title=None, axis=alt.Axis(format="%-I:%M %p", tickCount=5, labelAngle=0)),
+        y=alt.Y("pct:Q", title="% of the Monday before", scale=alt.Scale(domain=[0, 200])),
+        color=alt.Color("group:N", title=None, sort=_order, legend=alt.Legend(orient="top", columns=2),
+                        scale=alt.Scale(domain=_order, range=["#1c7ed6", "#868e96", "#adb5bd", "#ced4da", "#e9ecef"])),
+        strokeWidth=alt.StrokeWidth("group:N", sort=_order, legend=None, scale=alt.Scale(domain=_order, range=[3, 1.3, 1.3, 1.3, 1.3])),
+        tooltip=["group:N", alt.Tooltip("time_pt:T", format="%-I:%M %p", title="PT"), alt.Tooltip("n:Q", title="departures"),
+                 alt.Tooltip("base:Q", title="Monday before"), alt.Tooltip("pct:Q", format=".0f", title="%")])
+    _layers = [_ref, _lines]
+    if EP:
+        _band = pd.DataFrame([{"a": to_pt(pd.Series([EP["t0"]])).iloc[0], "b": to_pt(pd.Series([EP["t1"]])).iloc[0]}])
+        _layers.insert(0, alt.Chart(_band).mark_rect(color="#1c7ed6", opacity=0.10).encode(x="a:T", x2="b:T"))
+    epilogue_chart = alt.layer(*_layers).properties(width="container", height=240, title=alt.Title(
+        "Monday: United's outage hit only United",
+        subtitle="U.S. departures per 15 minutes as % of Monday, Nov. 9, from noon to 4 p.m. Pacific on Nov. 16"))
+else:
+    epilogue_chart = alt.Chart(pd.DataFrame({"x": []})).mark_point()
+epilogue_chart"""
+
 # every chart cell ends with fig(<chart>)
 import re as _re
 for _k in list(C):
@@ -1822,9 +1902,9 @@ ORDER = ["style", "header", "load", "summary_stats", "recovery_chart", "s_intro"
          "s_map2", "map_controls", "map",
          "part2", "s_who", "category_chart", "s_bizjet", "s_states", "states_chart", "s_intl", "intl_chart", "s_gateways", "gateway_chart", "airspace_map",
          "s_neighbors", "neighbors_chart", "s_tarmac", "tarmac_chart",
-         "part3", "s_recovery2", "restart_chart", "s_backlog", "backlog_chart", "s_sched", "sched_chart", "delay_chart", "s_weekend", "airline_chart", "context_head", "s_history",
+         "part3", "s_recovery2", "restart_chart", "s_backlog", "backlog_chart", "s_sched", "sched_chart", "delay_chart", "s_weekend", "airline_chart", "s_epilogue", "epilogue_chart", "context_head", "s_history",
          "method", "s_end", "config",
-         "imports", "part_fn", "derive", "findings", "findings2", "findings3", "findings4", "findings5", "findings6", "findings7", "findings8", "export",
+         "imports", "part_fn", "derive", "findings", "findings2", "findings3", "findings4", "findings5", "findings6", "findings7", "findings8", "findings9", "export",
          "events_fn", "widget", "helpers", "archive", "assets"]
 
 async with cm.get_context(skip_staleness_check=True) as ctx:
